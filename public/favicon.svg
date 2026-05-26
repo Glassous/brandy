@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="brandy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="160" height="160">
+            <ellipse cx="50" cy="20" rx="22" ry="4" fill="none" stroke="#D4B87A" stroke-width="4"/>
+            
+            <path d="M 28 20 C 5 50, 15 80, 50 80 C 85 80, 95 50, 72 20" fill="none" stroke="#D4B87A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            
+            <line x1="50" y1="80" x2="50" y2="94" stroke="#D4B87A" stroke-width="4" stroke-linecap="round"/>
+            
+            <line x1="35" y1="94" x2="65" y2="94" stroke="#D4B87A" stroke-width="4" stroke-linecap="round"/>
+            
+            <path d="M 20 56 Q 35 48 50 56 T 80 56" fill="none" stroke="#d35400" stroke-width="4" stroke-linecap="round"/>
+            
+            <path d="M 72 35 A 12 12 0 0 1 76 48" fill="none" stroke="#D4B87A" stroke-width="3" stroke-linecap="round"/>
+        </svg>

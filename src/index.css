@@ -1,0 +1,176 @@
+:root {
+  --brand-yellow: #D4B87A;   /* 牛皮纸黄 */
+  --brand-blue: #2C5F8A;     /* 文件夹蓝 */
+  --bg-paper: #F9F6F0;       /* 米白纸色 */
+  --bg-card: #FFFFFF;         /* 卡片白 */
+  --bubble-self: #D4B87A;     /* 自己气泡 */
+  --bubble-other: #FFFFFF;    /* 对方气泡 */
+  --text-primary: #1A1A1A;    /* 主文字 */
+  --text-secondary: #5C5A55;  /* 次文字 */
+  --badge-unread: #E87A5E;    /* 未读角标 */
+  --border-light: #E5DFD0;    /* 浅边框 */
+
+  /* Legacy mappings */
+  --bg: var(--bg-paper);
+  --text: var(--text-primary);
+  --text-dim: var(--text-secondary);
+  --border: var(--border-light);
+  --btn-bg: var(--brand-blue);
+  --btn-text: #FFFFFF;
+  --hover: #F0EDE4;
+  --radius: 12px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
+  --avatar-bg: var(--brand-blue);
+  --avatar-text: #FFFFFF;
+  --bubble-self-text: #1A1A1A;
+}
+
+[data-theme="dark"] {
+  --brand-yellow: #E5C68A;   /* 亮金色/温暖纸黄 */
+  --brand-blue: #4A81AD;     /* 浅色文件夹蓝 */
+  --bg-paper: #1B1915;       /* 暖墨黑/深咖啡纸色 */
+  --bg-card: #25221C;        /* 深色卡片褐 */
+  --bubble-self: #B5985C;    /* 自己气泡 */
+  --bubble-other: #25221C;   /* 对方气泡 */
+  --text-primary: #ECE6DA;    /* 主文字 */
+  --text-secondary: #9E9685;  /* 次文字 */
+  --badge-unread: #F08D73;    /* 未读角标 */
+  --border-light: #3D372C;    /* 深色浅边框 */
+
+  /* Legacy mappings */
+  --bg: var(--bg-paper);
+  --text: var(--text-primary);
+  --text-dim: var(--text-secondary);
+  --border: var(--border-light);
+  --btn-bg: var(--brand-blue);
+  --btn-text: #1B1915;
+  --hover: #2E2A22;
+
+  --avatar-bg: var(--brand-blue);
+  --avatar-text: #1B1915;
+  --bubble-self-text: #1B1915;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+input, button {
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+}
+
+input:focus {
+  border-color: var(--text);
+}
+
+button {
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 14px;
+  background: var(--btn-bg);
+  color: var(--btn-text);
+}
+
+.btn:hover { opacity: 0.85; }
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover { background: var(--hover); }
+
+.btn-danger {
+  background: var(--badge-unread);
+  color: var(--bg-card);
+}
+
+.btn-danger:hover { opacity: 0.9; }
+
+[data-theme="dark"] .btn-danger {
+  background: var(--badge-unread);
+  color: var(--bg-paper);
+}
+
+[data-theme="dark"] .btn-danger:hover { opacity: 0.9; }
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.avatar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--avatar-text);
+  background: var(--avatar-bg);
+  border-radius: 50%;
+  user-select: none;
+  text-transform: uppercase;
+}
+
+.toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 10px 20px;
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.toast.success { border-left: 3px solid var(--brand-blue); }
+.toast.error   { border-left: 3px solid var(--badge-unread); }

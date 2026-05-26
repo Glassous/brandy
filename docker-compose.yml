@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:latest
+    container_name: brandy-mongo
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    restart: always
+
+  redis:
+    image: redis:alpine
+    container_name: brandy-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    restart: always
+
+  backend:
+    build:
+      context: ./brandybackend
+      dockerfile: Dockerfile
+    container_name: brandy-backend
+    ports:
+      - "8181:8081"
+    depends_on:
+      - mongo
+      - redis
+    environment:
+      - PORT=8081
+      - MONGO_URI=mongodb://mongo:27017
+      - MONGO_DB=brandy
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - JWT_SECRET=brandy_super_secret_key_123!@#
+    restart: always
+
+volumes:
+  mongo-data:
+  redis-data:
