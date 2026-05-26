@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../shared/Avatar';
-import type { Message } from '../../contexts/AppContext';
+import { useApp, type Message } from '../../contexts/AppContext';
+import { useToast } from '../shared/Toast';
+
+const API_BASE = 'http://localhost:8181';
 
 interface ChatRoomProps {
   currentUserId: string;
@@ -11,6 +14,162 @@ interface ChatRoomProps {
   messages: Message[];
   onSend: (receiverId: string, content: string) => void;
   onLoad: (friendId: string) => Promise<void>;
+}
+
+interface FileShareData {
+  type: string;
+  file_id: string;
+  file_name: string;
+  file_size: number;
+  url: string;
+}
+
+function FileShareCard({ fileShareData, isOwn }: { fileShareData: FileShareData; isOwn: boolean }) {
+  const { token } = useApp();
+  const { showToast } = useToast();
+  const [transferred, setTransferred] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (isOwn) {
+      setChecking(false);
+      return;
+    }
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/disk/check-transfer/${fileShareData.file_id}`, {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTransferred(data.transferred);
+        }
+      } catch { /* ignore */ }
+      finally {
+        setChecking(false);
+      }
+    };
+    checkStatus();
+  }, [fileShareData.file_id, isOwn, token]);
+
+  const handleTransfer = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/transfer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ file_id: fileShareData.file_id }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTransferred(true);
+        showToast('转存成功并已物理复制为您的独立文件！', 'success');
+      } else {
+        showToast(data.error || '转存失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，转存失败', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const formatBytes = (bytes: number, decimals = 1) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+  };
+
+  const getFileIcon = (fileName: string) => {
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '')) {
+      return (
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+          <circle cx="8.5" cy="8.5" r="1.5" />
+          <polyline points="21 15 16 10 5 21" />
+        </svg>
+      );
+    }
+    if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext || '')) {
+      return (
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="12" y1="6" x2="12" y2="18" />
+          <line x1="8" y1="10" x2="16" y2="10" />
+          <line x1="8" y1="14" x2="16" y2="14" />
+        </svg>
+      );
+    }
+    return (
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+        <polyline points="13 2 13 9 20 9" />
+      </svg>
+    );
+  };
+
+  return (
+    <div className="share-card-container">
+      <div className="share-card-info">
+        <div style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}>
+          {getFileIcon(fileShareData.file_name)}
+        </div>
+        <div className="share-card-details">
+          <span className="share-card-name" title={fileShareData.file_name}>{fileShareData.file_name}</span>
+          <span className="share-card-size">{formatBytes(fileShareData.file_size)}</span>
+        </div>
+      </div>
+      <div className="share-card-actions">
+        <a href={fileShareData.url} target="_blank" rel="noopener noreferrer" style={{ flex: 1, textDecoration: 'none' }}>
+          <button className="share-card-btn" style={{ width: '100%' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ marginRight: '4px' }}>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            下载
+          </button>
+        </a>
+
+        {isOwn ? (
+          <button className="share-card-btn" disabled style={{ flex: 1 }}>
+            已分享的文件
+          </button>
+        ) : checking ? (
+          <button className="share-card-btn" disabled style={{ flex: 1 }}>
+            检测中...
+          </button>
+        ) : transferred ? (
+          <button className="share-card-btn" disabled style={{ flex: 1 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ color: 'var(--brand-yellow)', marginRight: '4px' }}>
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            已转存
+          </button>
+        ) : (
+          <button
+            className="share-card-btn primary"
+            onClick={handleTransfer}
+            disabled={saving}
+            style={{ flex: 1 }}
+          >
+            {saving ? '转存中...' : '转存至云盘'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function formatTime(ts: string) {
@@ -64,7 +223,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           transition: color 0.2s, background-color 0.2s;
         }
         .cr-info:hover { color: var(--brand-blue); background: var(--hover); }
-
+ 
         .cr-msgs {
           flex: 1;
           overflow-y: auto;
@@ -107,7 +266,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           background: var(--bubble-other);
           color: var(--text-primary);
         }
-
+ 
         .bubble-other.first-of-group {
           border-radius: 4px 16px 16px 16px;
         }
@@ -120,7 +279,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
         .bubble-own.consecutive {
           border-radius: 16px 16px 16px 16px;
         }
-
+ 
         .msg-text {
           font-size: 14px;
           line-height: 1.45;
@@ -140,7 +299,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           align-self: flex-start;
           margin-left: 40px; /* 32px avatar + 8px gap */
         }
-
+ 
         .cr-input-bar {
           display: flex;
           gap: 12px;
@@ -189,8 +348,89 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           color: var(--text-dim);
           font-size: 13px;
         }
-      `}</style>
 
+        /* File Share Card Styles */
+        .share-card-container {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          min-width: 230px;
+          padding: 4px 0;
+        }
+        .share-card-info {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .share-card-details {
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          flex: 1;
+        }
+        .share-card-name {
+          font-weight: 600;
+          font-size: 13.5px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: var(--text-primary);
+        }
+        .bubble-own .share-card-name {
+          color: var(--bubble-self-text);
+        }
+        .share-card-size {
+          font-size: 11px;
+          opacity: 0.75;
+          color: var(--text-secondary);
+        }
+        .bubble-own .share-card-size {
+          color: var(--bubble-self-text);
+          opacity: 0.8;
+        }
+        .share-card-actions {
+          display: flex;
+          gap: 8px;
+          border-top: 1px solid rgba(0,0,0,0.06);
+          padding-top: 8px;
+          margin-top: 4px;
+        }
+        [data-theme="dark"] .share-card-actions {
+          border-top: 1px solid rgba(255,255,255,0.08);
+        }
+        .share-card-btn {
+          flex: 1;
+          font-size: 11.5px;
+          padding: 6px 8px;
+          border-radius: 6px;
+          font-weight: 600;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          background: var(--bg-card);
+          color: var(--text-primary);
+          border: 1px solid var(--border-light);
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .share-card-btn:hover:not(:disabled) {
+          background: var(--hover);
+        }
+        .share-card-btn:disabled {
+          opacity: 0.75;
+          cursor: not-allowed;
+        }
+        .share-card-btn.primary {
+          background: var(--brand-blue);
+          color: #fff;
+          border: none;
+        }
+        .share-card-btn.primary:hover:not(:disabled) {
+          opacity: 0.9;
+        }
+      `}</style>
+ 
       {/* Header Info */}
       <div className="cr-header">
         <span className="cr-name">{friendName || '聊天'}</span>
@@ -201,7 +441,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           </svg>
         </button>
       </div>
-
+ 
       {/* Messages Scroll Area */}
       <div className="cr-msgs">
         {messages.length === 0 ? (
@@ -210,7 +450,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           messages.map((m, i) => {
             const isOwn = m.sender_id === currentUserId;
             const isFirstOfGroup = i === 0 || messages[i - 1].sender_id !== m.sender_id;
-
+ 
             // Shared timestamp helper: display time below bubble at 5-minute intervals or for last message
             let showTime = false;
             if (i === messages.length - 1) {
@@ -221,7 +461,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
               const nextMs = new Date(nextMsg.created_at).getTime();
               showTime = (nextMs - currentMs) > 5 * 60 * 1000;
             }
-
+ 
             return (
               <div key={m.id} className="msg-container">
                 <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
@@ -233,7 +473,22 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
                     )
                   )}
                   <div className={`msg-bubble ${isOwn ? 'bubble-own' : 'bubble-other'} ${isFirstOfGroup ? 'first-of-group' : 'consecutive'}`}>
-                    <span className="msg-text">{m.content}</span>
+                    {(() => {
+                      let fileShareData = null;
+                      if (m.content.startsWith('{')) {
+                        try {
+                          const parsed = JSON.parse(m.content);
+                          if (parsed && parsed.type === 'file_share') {
+                            fileShareData = parsed;
+                          }
+                        } catch { /* ignore */ }
+                      }
+
+                      if (fileShareData) {
+                        return <FileShareCard fileShareData={fileShareData} isOwn={isOwn} />;
+                      }
+                      return <span className="msg-text">{m.content}</span>;
+                    })()}
                   </div>
                 </div>
                 {showTime && (
@@ -247,7 +502,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
         )}
         <div ref={bottomRef} />
       </div>
-
+ 
       {/* Input Sender Bar */}
       <form onSubmit={handleSend} className="cr-input-bar">
         <input

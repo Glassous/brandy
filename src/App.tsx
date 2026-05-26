@@ -10,6 +10,8 @@ import { AddFriendPage } from './pages/AddFriendPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AccountSettingsPage } from './pages/AccountSettingsPage';
 import { ThemeSettingsPage } from './pages/ThemeSettingsPage';
+import { DiskPage } from './pages/DiskPage';
+
 
 function ProtectedRoute() {
   const { token } = useApp();
@@ -46,6 +48,7 @@ export default function App() {
                   <Route path="/profile" element={<ProfilePage />} />
                   <Route path="/profile/account" element={<AccountSettingsPage />} />
                   <Route path="/profile/theme" element={<ThemeSettingsPage />} />
+                  <Route path="/disk" element={<DiskPage />} />
                 </Route>
               </Route>
               <Route path="*" element={<Navigate to="/chat" replace />} />

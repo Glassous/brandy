@@ -77,6 +77,18 @@ func main() {
 		// Chat historical routes
 		api.GET("/chats", handlers.GetChats)
 		api.GET("/chats/:friend_id/messages", handlers.GetChatMessages)
+
+		// Cloud Disk Routes
+		api.GET("/disk/items", handlers.GetDiskItems)
+		api.GET("/disk/usage", handlers.GetDiskUsage)
+		api.POST("/disk/folders", handlers.CreateFolder)
+		api.POST("/disk/upload", handlers.UploadDiskFile)
+		api.PUT("/disk/items/:id", handlers.RenameDiskItem)
+		api.DELETE("/disk/items/:id", handlers.DeleteDiskItem)
+		api.GET("/disk/folders/:id/path", handlers.GetFolderPath)
+		api.POST("/disk/share/friend", handlers.ShareToFriend)
+		api.GET("/disk/check-transfer/:origin_id", handlers.CheckTransferStatus)
+		api.POST("/disk/transfer", handlers.TransferDiskFile)
 	}
 
 	// WebSocket endpoint

@@ -69,3 +69,18 @@ type FriendResponse struct {
 	Avatar    string    `json:"avatar"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type DiskItem struct {
+	ID           primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
+	UserID       primitive.ObjectID  `bson:"user_id" json:"user_id"`
+	ParentID     *primitive.ObjectID `bson:"parent_id,omitempty" json:"parent_id"`
+	OriginItemID *primitive.ObjectID `bson:"origin_item_id,omitempty" json:"origin_item_id"`
+	Name         string              `bson:"name" json:"name"`
+	Type         string              `bson:"type" json:"type"`
+	Size         int64               `bson:"size,omitempty" json:"size"`
+	CosKey       string              `bson:"cos_key,omitempty" json:"cos_key"`
+	URL          string              `bson:"url,omitempty" json:"url"`
+	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
+	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`
+}
+
