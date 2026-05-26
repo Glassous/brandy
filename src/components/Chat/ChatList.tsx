@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Avatar } from '../shared/Avatar';
 import type { ChatSession } from '../../contexts/AppContext';
 
@@ -26,6 +27,19 @@ export function ChatList({
   onTogglePin,
   activeFriendId
 }: ChatListProps) {
+  const [contextMenu, setContextMenu] = useState<{ friendId: string; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const handleClick = () => setContextMenu(null);
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleContextMenu = (e: React.MouseEvent, friendId: string) => {
+    e.preventDefault();
+    setContextMenu({ friendId, x: e.clientX, y: e.clientY });
+  };
+
   // Sort pinned chats first, then sort by last message time
   const sorted = [...chats].sort((a, b) => {
     const aPinned = pinnedChats.includes(a.friend_id);
@@ -106,38 +120,7 @@ export function ChatList({
           flex-shrink: 0;
           padding: 0 4px;
         }
-        .chat-item-actions {
-          display: none;
-          gap: 6px;
-          align-items: center;
-          margin-left: 8px;
-        }
-        .chat-item:hover .chat-item-actions {
-          display: flex;
-        }
-        .chat-action-btn {
-          width: 22px;
-          height: 22px;
-          border-radius: 50%;
-          background: var(--bg-card);
-          border: 1px solid var(--border);
-          color: var(--text-dim);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          cursor: pointer;
-          transition: all 0.2s ease;
-        }
-        .chat-action-btn:hover {
-          background: var(--hover);
-          color: var(--text);
-          border-color: var(--text-dim);
-        }
-        .chat-action-btn.pin-active {
-          color: var(--brand-yellow);
-          border-color: var(--brand-yellow);
-        }
+
         .empty {
           flex: 1;
           display: flex;
@@ -145,6 +128,29 @@ export function ChatList({
           justify-content: center;
           color: var(--text-dim);
           font-size: 13px;
+        }
+        .context-menu {
+          position: fixed;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 4px 0;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+          z-index: 1000;
+        }
+        .context-menu-item {
+          display: block;
+          width: 100%;
+          padding: 8px 16px;
+          border: none;
+          background: none;
+          cursor: pointer;
+          text-align: left;
+          font-size: 13px;
+          color: var(--text);
+        }
+        .context-menu-item:hover {
+          background: var(--hover);
         }
       `}</style>
       <div style={{ flex: 1, overflow: 'auto' }}>
@@ -161,6 +167,7 @@ export function ChatList({
                 onClick={() => {
                   onSelectFriend(chat.friend_id);
                 }}
+                onContextMenu={(e) => handleContextMenu(e, chat.friend_id)}
               >
                 <Avatar name={displayName} url={chat.friend_avatar} size={40} />
                 <div className="chat-info">
@@ -176,37 +183,37 @@ export function ChatList({
                     </div>
                   </div>
                 </div>
-                
-                {/* Actions: Pin / Hide */}
-                <div className="chat-item-actions">
-                  <button
-                    type="button"
-                    className={`chat-action-btn ${isPinned ? 'pin-active' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTogglePin?.(chat.friend_id);
-                    }}
-                    title={isPinned ? "取消置顶" : "置顶对话"}
-                  >
-                    📌
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-action-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onHideChat?.(chat.friend_id);
-                    }}
-                    title="不在主页显示该对话"
-                  >
-                    ×
-                  </button>
-                </div>
               </div>
             );
           })
         )}
       </div>
+      {contextMenu && (
+        <div
+          className="context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              onTogglePin?.(contextMenu.friendId);
+              setContextMenu(null);
+            }}
+          >
+            📌 {pinnedChats.includes(contextMenu.friendId) ? '取消置顶' : '置顶对话'}
+          </button>
+          <button
+            className="context-menu-item"
+            onClick={() => {
+              onHideChat?.(contextMenu.friendId);
+              setContextMenu(null);
+            }}
+          >
+            × 不在主页显示该对话
+          </button>
+        </div>
+      )}
     </div>
   );
 }
