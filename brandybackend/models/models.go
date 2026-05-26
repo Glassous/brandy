@@ -11,6 +11,7 @@ type User struct {
 	Username           string             `bson:"username" json:"username"`
 	PasswordHash       string             `bson:"password_hash" json:"-"`
 	Nickname           string             `bson:"nickname" json:"nickname"`
+	Avatar             string             `bson:"avatar" json:"avatar"`
 	SecurityQuestion   string             `bson:"security_question" json:"security_question"`
 	SecurityAnswerHash string             `bson:"security_answer_hash" json:"-"`
 	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
@@ -46,6 +47,7 @@ type UserResponse struct {
 	ID        string    `json:"id"`
 	Username  string    `json:"username"`
 	Nickname  string    `json:"nickname"`
+	Avatar    string    `json:"avatar"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -53,6 +55,7 @@ type ChatSession struct {
 	FriendID      string    `json:"friend_id"`
 	FriendName    string    `json:"friend_name"`
 	FriendRemark  string    `json:"friend_remark"`
+	FriendAvatar  string    `json:"friend_avatar"`
 	LastMessage   string    `json:"last_message"`
 	LastMsgTime   time.Time `json:"last_msg_time"`
 	UnreadCount   int64     `json:"unread_count"`
@@ -63,5 +66,6 @@ type FriendResponse struct {
 	Username  string    `json:"username"`
 	Nickname  string    `json:"nickname"`
 	Remark    string    `json:"remark"`
+	Avatar    string    `json:"avatar"`
 	CreatedAt time.Time `json:"created_at"`
 }

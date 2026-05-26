@@ -162,7 +162,7 @@ export function ChatList({
                   onSelectFriend(chat.friend_id);
                 }}
               >
-                <Avatar name={displayName} size={40} />
+                <Avatar name={displayName} url={chat.friend_avatar} size={40} />
                 <div className="chat-info">
                   <div className="chat-info-top">
                     <span className="chat-name">{displayName}</span>

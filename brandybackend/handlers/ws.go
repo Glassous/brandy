@@ -372,6 +372,7 @@ func GetChats(c *gin.Context) {
 				FriendID:     rawChat.FriendID.Hex(),
 				FriendName:   friend.Nickname,
 				FriendRemark: remark,
+				FriendAvatar: friend.Avatar,
 				LastMessage:  rawChat.LastMessage,
 				LastMsgTime:  rawChat.LastMsgTime,
 				UnreadCount:  rawChat.UnreadCount,

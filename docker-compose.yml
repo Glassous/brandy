@@ -29,6 +29,8 @@ services:
     depends_on:
       - mongo
       - redis
+    env_file:
+      - ./brandybackend/.env
     environment:
       - PORT=8081
       - MONGO_URI=mongodb://mongo:27017

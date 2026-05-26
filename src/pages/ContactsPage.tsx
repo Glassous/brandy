@@ -329,7 +329,7 @@ export function ContactsPage() {
                 const displayName = remark ? `${remark} (${f.nickname})` : f.nickname;
                 return (
                   <div key={f.id} className="ct-item" onClick={() => handleFriendClick(f)}>
-                    <Avatar name={displayName} size={40} />
+                    <Avatar name={displayName} url={f.avatar} size={40} />
                     <div className="ct-item-info">
                       <div className="ct-item-name">{displayName}</div>
                       <div className="ct-item-sub">@{f.username}</div>
@@ -364,7 +364,7 @@ export function ContactsPage() {
             ) : (
               friendRequests.map(req => (
                 <div key={req.request_id} className="ct-req-card">
-                  <Avatar name={req.sender_nickname} size={40} />
+                  <Avatar name={req.sender_nickname} url={req.sender_avatar} size={40} />
                   <div className="ct-req-info">
                     <div className="ct-req-name">{req.sender_nickname}</div>
                     <div className="ct-req-sub">@{req.sender_username}</div>
@@ -399,7 +399,7 @@ export function ContactsPage() {
           <div className="ct-content">
             <div className="ct-detail-container">
               <div className="ct-detail-avatar-wrapper">
-                <Avatar name={remarks[selectedFriend.id] || selectedFriend.nickname} size={80} fontSize={32} />
+                <Avatar name={remarks[selectedFriend.id] || selectedFriend.nickname} url={selectedFriend.avatar} size={80} fontSize={32} />
               </div>
               <div className="ct-detail-info">
                 <div className="ct-detail-name">{remarks[selectedFriend.id] || selectedFriend.nickname}</div>

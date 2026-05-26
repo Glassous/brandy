@@ -38,6 +38,7 @@ export function ChatPage() {
         const tempSession = {
           friend_id: activeFriend.id,
           friend_name: remarks[activeFriend.id] || activeFriend.nickname || activeFriend.username,
+          friend_avatar: activeFriend.avatar,
           last_message: '',
           last_msg_time: new Date().toISOString(),
           unread_count: 0,
@@ -151,6 +152,7 @@ export function ChatPage() {
             currentUserId={user.id}
             friendId={activeChat.friend_id}
             friendName={remarks[activeChat.friend_id] || activeChat.friend_name}
+            friendAvatar={activeChat.friend_avatar}
             messages={messages}
             onSend={(fid, content) => handleSend(fid, content)}
             onLoad={handleLoad}

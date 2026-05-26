@@ -270,7 +270,7 @@ export function AddFriendPage() {
         {/* User Card Preview */}
         {searchedUser && (
           <div className="af-preview-card">
-            <Avatar name={searchedUser.nickname} size={64} fontSize={26} />
+            <Avatar name={searchedUser.nickname} url={searchedUser.avatar} size={64} fontSize={26} />
             <div className="af-preview-info">
               <div className="af-preview-name">{searchedUser.nickname}</div>
               <div className="af-preview-username">@{searchedUser.username}</div>

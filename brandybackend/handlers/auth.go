@@ -114,6 +114,7 @@ func Register(c *gin.Context) {
 			ID:        newUser.ID.Hex(),
 			Username:  newUser.Username,
 			Nickname:  newUser.Nickname,
+			Avatar:    newUser.Avatar,
 			CreatedAt: newUser.CreatedAt,
 		},
 	})
@@ -159,6 +160,7 @@ func Login(c *gin.Context) {
 			ID:        user.ID.Hex(),
 			Username:  user.Username,
 			Nickname:  user.Nickname,
+			Avatar:    user.Avatar,
 			CreatedAt: user.CreatedAt,
 		},
 	})
@@ -254,6 +256,7 @@ func GetProfile(c *gin.Context) {
 		ID:        user.ID.Hex(),
 		Username:  user.Username,
 		Nickname:  user.Nickname,
+		Avatar:    user.Avatar,
 		CreatedAt: user.CreatedAt,
 	})
 }

@@ -28,6 +28,7 @@ type FriendRequestResponse struct {
 	SenderID       string `json:"sender_id"`
 	SenderUsername string `json:"sender_username"`
 	SenderNickname string `json:"sender_nickname"`
+	SenderAvatar   string `json:"sender_avatar"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -141,6 +142,7 @@ func GetFriendRequests(c *gin.Context) {
 				SenderID:       req.SenderID.Hex(),
 				SenderUsername: sender.Username,
 				SenderNickname: sender.Nickname,
+				SenderAvatar:   sender.Avatar,
 				CreatedAt:      req.CreatedAt,
 			})
 		}
@@ -248,6 +250,7 @@ func GetFriends(c *gin.Context) {
 			Username:  u.Username,
 			Nickname:  u.Nickname,
 			Remark:    friendRemarks[u.ID.Hex()],
+			Avatar:    u.Avatar,
 			CreatedAt: u.CreatedAt,
 		})
 	}
@@ -334,6 +337,7 @@ func SearchUser(c *gin.Context) {
 		ID:        user.ID.Hex(),
 		Username:  user.Username,
 		Nickname:  user.Nickname,
+		Avatar:    user.Avatar,
 		CreatedAt: user.CreatedAt,
 	})
 }

@@ -63,6 +63,7 @@ func main() {
 		// User profile
 		api.GET("/user/profile", handlers.GetProfile)
 		api.PUT("/user/profile", handlers.UpdateProfile)
+		api.POST("/user/avatar", handlers.UploadAvatar)
 		api.GET("/users/search", handlers.SearchUser)
 
 		// Friend relationship

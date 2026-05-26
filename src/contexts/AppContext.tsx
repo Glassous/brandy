@@ -7,6 +7,7 @@ export interface User {
   id: string;
   username: string;
   nickname: string;
+  avatar?: string;
 }
 
 export interface Message {
@@ -21,6 +22,7 @@ export interface ChatSession {
   friend_id: string;
   friend_name: string;
   friend_remark?: string;
+  friend_avatar?: string;
   last_message: string;
   last_msg_time: string;
   unread_count: number;
@@ -31,6 +33,7 @@ export interface Friend {
   username: string;
   nickname: string;
   remark?: string;
+  avatar?: string;
 }
 
 export interface FriendRequest {
@@ -38,6 +41,7 @@ export interface FriendRequest {
   sender_id: string;
   sender_username: string;
   sender_nickname: string;
+  sender_avatar?: string;
   created_at: string;
 }
 
@@ -58,6 +62,7 @@ interface AppCtx {
   handleFriendRequest: (requestId: string, status: 'accepted' | 'rejected') => Promise<void>;
   deleteFriend: (friendId: string) => Promise<void>;
   updateNickname: (newNickname: string) => Promise<boolean>;
+  uploadAvatar: (file: File) => Promise<string | null>;
   startChat: (friendId: string, friendName: string) => void;
   fetchChats: () => Promise<void>;
   fetchFriends: () => Promise<void>;
@@ -300,6 +305,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch { showToast('网络错误', 'error'); return false; }
   }, [token, user, getHeaders, fetchChats, showToast]);
 
+  const uploadAvatar = useCallback(async (file: File): Promise<string | null> => {
+    if (!token || !user) return null;
+    try {
+      const formData = new FormData();
+      formData.append('avatar', file);
+
+      const res = await fetch(`${API_BASE}/api/user/avatar`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || '上传头像失败', 'error');
+        return null;
+      }
+
+      const u = { ...user, avatar: data.avatar };
+      setUser(u);
+      localStorage.setItem('user', JSON.stringify(u));
+      
+      showToast('头像已更新', 'success');
+      fetchChats();
+      fetchFriends();
+      return data.avatar;
+    } catch {
+      showToast('网络错误，上传失败', 'error');
+      return null;
+    }
+  }, [token, user, fetchChats, fetchFriends, showToast]);
+
   const startChat = useCallback((friendId: string, friendName: string) => {
     setChats(prev => {
       if (prev.some(c => c.friend_id === friendId)) return prev;
@@ -427,6 +466,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addFriend, handleFriendRequest, deleteFriend, updateNickname, startChat,
       fetchChats, fetchFriends, fetchFriendRequests,
       hiddenChats, remarks, pinnedChats, hideChat, updateRemark, togglePinChat,
+      uploadAvatar,
     }}>
       {children}
     </AppContext.Provider>

@@ -7,6 +7,7 @@ interface ChatRoomProps {
   currentUserId: string;
   friendId: string;
   friendName?: string;
+  friendAvatar?: string;
   messages: Message[];
   onSend: (receiverId: string, content: string) => void;
   onLoad: (friendId: string) => Promise<void>;
@@ -17,7 +18,7 @@ function formatTime(ts: string) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function ChatRoom({ currentUserId, friendId, friendName, messages, onSend, onLoad }: ChatRoomProps) {
+export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, messages, onSend, onLoad }: ChatRoomProps) {
   const [text, setText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -226,7 +227,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, messages, onSend
                 <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
                   {!isOwn && (
                     isFirstOfGroup ? (
-                      <Avatar name={friendName || '?'} size={32} fontSize={13} />
+                      <Avatar name={friendName || '?'} url={friendAvatar} size={32} fontSize={13} />
                     ) : (
                       <div style={{ width: 32, flexShrink: 0 }} />
                     )

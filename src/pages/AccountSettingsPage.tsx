@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { Avatar } from '../components/shared/Avatar';
+import { AvatarCropper } from '../components/shared/AvatarCropper';
 import { Link } from 'react-router-dom';
 
 const API_BASE = 'http://localhost:8181';
 
 export function AccountSettingsPage() {
-  const { user, updateNickname, logout } = useApp();
+  const { user, updateNickname, logout, uploadAvatar } = useApp();
   const [nick, setNick] = useState(user?.nickname || '');
   const [saving, setSaving] = useState(false);
 
@@ -14,6 +15,10 @@ export function AccountSettingsPage() {
   const [answer, setAnswer] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [resetting, setResetting] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -46,6 +51,26 @@ export function AccountSettingsPage() {
       setNewPwd('');
     } catch { /* ignore */ }
     setResetting(false);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSelectedImage(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleCropComplete = async (croppedBlob: Blob) => {
+    setSelectedImage(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    
+    setUploading(true);
+    const file = new File([croppedBlob], 'avatar.jpg', { type: 'image/jpeg' });
+    await uploadAvatar(file);
+    setUploading(false);
   };
 
   return (
@@ -102,6 +127,53 @@ export function AccountSettingsPage() {
           align-items: center;
           gap: 8px;
         }
+        .pf-avatar-wrapper {
+          position: relative;
+          cursor: pointer;
+          border-radius: 50%;
+          overflow: hidden;
+          width: 64px;
+          height: 64px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 2px solid var(--border);
+          transition: border-color 0.2s, transform 0.2s;
+        }
+        .pf-avatar-wrapper:hover {
+          border-color: var(--accent);
+          transform: scale(1.05);
+        }
+        .pf-avatar-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.5);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0;
+          transition: opacity 0.2s;
+          color: #fff;
+        }
+        .pf-avatar-wrapper:hover .pf-avatar-overlay {
+          opacity: 1;
+        }
+        .pf-avatar-uploading {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.6);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: 11px;
+        }
         .pf-name {
           font-size: 18px;
           font-weight: 700;
@@ -145,7 +217,27 @@ export function AccountSettingsPage() {
 
       <div className="ac-content">
         <div className="pf-section pf-center">
-          <Avatar name={user?.nickname || '?'} size={56} fontSize={22} />
+          <div className="pf-avatar-wrapper" onClick={() => fileInputRef.current?.click()} title="更换头像">
+            <Avatar name={user?.nickname || '?'} url={user?.avatar} size={60} fontSize={24} />
+            <div className="pf-avatar-overlay">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
+            </div>
+            {uploading && (
+              <div className="pf-avatar-uploading">
+                上传中
+              </div>
+            )}
+          </div>
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            accept="image/*"
+            onChange={handleFileChange}
+          />
           <div className="pf-name">{user?.nickname}</div>
           <div className="pf-username">@{user?.username}</div>
         </div>
@@ -190,6 +282,17 @@ export function AccountSettingsPage() {
           </button>
         </div>
       </div>
+
+      {selectedImage && (
+        <AvatarCropper
+          imageSrc={selectedImage}
+          onCrop={handleCropComplete}
+          onClose={() => {
+            setSelectedImage(null);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }}
+        />
+      )}
     </div>
   );
 }
