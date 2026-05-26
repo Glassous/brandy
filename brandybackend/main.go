@@ -47,8 +47,9 @@ func main() {
 	r := gin.Default()
 	r.Use(CORSMiddleware())
 
-	// Public Routes
+	// Public Routes with stricter rate limiting for auth endpoints
 	auth := r.Group("/api/auth")
+	auth.Use(middleware.RateLimitMiddleware(middleware.AuthRateLimit))
 	{
 		auth.POST("/register", handlers.Register)
 		auth.POST("/login", handlers.Login)
@@ -60,6 +61,7 @@ func main() {
 	// Protected Routes
 	api := r.Group("/api")
 	api.Use(middleware.AuthMiddleware())
+	api.Use(middleware.RateLimitMiddleware(middleware.DefaultRateLimit))
 	{
 		// User profile
 		api.GET("/user/profile", handlers.GetProfile)

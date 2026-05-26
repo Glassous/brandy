@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { useToast } from '../components/shared/Toast';
+import { UploadProgress, useUploadProgress } from '../components/shared/UploadProgress';
 
 const API_BASE = 'http://localhost:8181';
 
@@ -26,6 +27,7 @@ interface Breadcrumb {
 export function DiskPage() {
   const { token, friends } = useApp();
   const { showToast } = useToast();
+  const { uploadState, startUpload, updateProgress, completeUpload, errorUpload, cancelUpload, setXhr } = useUploadProgress();
 
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [items, setItems] = useState<DiskItem[]>([]);
@@ -34,8 +36,6 @@ export function DiskPage() {
   const [limitSpace, setLimitSpace] = useState<number>(200 * 1024 * 1024); // 200M
 
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
   // Modals state
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
@@ -142,7 +142,7 @@ export function DiskPage() {
     }
   };
 
-  // Handle file upload
+  // Handle file upload with progress
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -156,39 +156,56 @@ export function DiskPage() {
       return;
     }
 
-    setUploading(true);
-    setUploadProgress('正在上传中...');
+    startUpload(file.name);
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      if (currentFolderId) {
-        formData.append('parent_id', currentFolderId);
+    const formData = new FormData();
+    formData.append('file', file);
+    if (currentFolderId) {
+      formData.append('parent_id', currentFolderId);
+    }
+
+    const xhr = new XMLHttpRequest();
+    setXhr(xhr);
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100);
+        updateProgress(percentComplete);
       }
+    });
 
-      const res = await fetch(`${API_BASE}/api/disk/upload`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (res.ok) {
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        completeUpload();
         showToast('文件上传成功', 'success');
         fetchItems(currentFolderId);
         fetchUsage();
       } else {
-        showToast(data.error || '文件上传失败', 'error');
+        try {
+          const data = JSON.parse(xhr.responseText);
+          errorUpload(data.error || '文件上传失败');
+          showToast(data.error || '文件上传失败', 'error');
+        } catch {
+          errorUpload('文件上传失败');
+          showToast('文件上传失败', 'error');
+        }
       }
-    } catch {
-      showToast('网络错误，上传失败', 'error');
-    } finally {
-      setUploading(false);
-      setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+    });
+
+    xhr.addEventListener('error', () => {
+      errorUpload('网络错误，上传失败');
+      showToast('网络错误，上传失败', 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    });
+
+    xhr.addEventListener('abort', () => {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    });
+
+    xhr.open('POST', `${API_BASE}/api/disk/upload`);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.send(formData);
   };
 
   // Handle rename
@@ -683,14 +700,14 @@ export function DiskPage() {
             className="btn"
             style={{ width: '100%' }}
             onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
+            disabled={uploadState.active}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
-            {uploading ? '上传中...' : '上传文件'}
+            {uploadState.active ? '上传中...' : '上传文件'}
           </button>
           <input
             type="file"
@@ -713,10 +730,14 @@ export function DiskPage() {
           </button>
         </div>
 
-        {uploadProgress && (
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', textAlign: 'center', animation: 'pulse 1.5s infinite' }}>
-            {uploadProgress}
-          </div>
+        {uploadState.active && (
+          <UploadProgress
+            fileName={uploadState.fileName}
+            progress={uploadState.progress}
+            status={uploadState.status}
+            errorMessage={uploadState.errorMessage}
+            onCancel={cancelUpload}
+          />
         )}
       </aside>
 
