@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { User } from '../../contexts/AppContext';
 
 const API_BASE = 'http://localhost:8181';
@@ -7,48 +7,159 @@ interface AuthShellProps {
   onLoginSuccess: (token: string, user: User) => void;
 }
 
-type Mode = 'login' | 'register' | 'forgot_answer';
+type Mode = 'login' | 'register' | 'forgot_code';
+type LoginMethod = 'password' | 'code';
+
+// Eye icon SVGs
+const EyeIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+const EyeOffIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
 
 export function AuthShell({ onLoginSuccess }: AuthShellProps) {
   const [mode, setMode] = useState<Mode>('login');
+  const [loginMethod, setLoginMethod] = useState<LoginMethod>('password');
+
+  // Input states
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [nickname, setNickname] = useState('');
-  const [securityQuestion, setSecurityQuestion] = useState('');
-  const [securityAnswer, setSecurityAnswer] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
 
-  const [forgotStep, setForgotStep] = useState<'question' | 'reset'>('question');
-  const [forgotAnswer, setForgotAnswer] = useState('');
+  // Password retrieval & reset
   const [forgotNewPwd, setForgotNewPwd] = useState('');
+
+  // Per-field password visibility
+  const [showLoginPwd, setShowLoginPwd] = useState(false);
+  const [showRegPwd, setShowRegPwd] = useState(false);
+  const [showRegConfirm, setShowRegConfirm] = useState(false);
+  const [showForgotPwd, setShowForgotPwd] = useState(false);
+
+  // Status states
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+  const [error, setError] = useState('');
 
   const clearError = () => setError('');
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!username.trim() || !password.trim()) { setError('请填写用户名和密码'); return; }
-    setLoading(true);
+  // Countdown timer effect
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => {
+      setCountdown(prev => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
+
+  const handleSendCode = async (purpose: 'register' | 'login' | 'reset', targetEmail: string) => {
+    if (!targetEmail.trim()) {
+      setError('请输入电子邮箱');
+      return;
+    }
+    if (!/\S+@\S+\.\S+/.test(targetEmail)) {
+      setError('请输入合法的电子邮箱地址');
+      return;
+    }
+
+    setSending(true);
     setError('');
     try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
+      const res = await fetch(`${API_BASE}/api/auth/send-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({ email: targetEmail.trim(), purpose }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || '登录失败'); return; }
-      onLoginSuccess(data.token, data.user);
-    } catch { setError('网络错误，请稍后重试'); }
-    finally { setLoading(false); }
+      if (!res.ok) {
+        setError(data.error || '发送验证码失败');
+        return;
+      }
+      setCountdown(60);
+    } catch {
+      setError('网络异常，发送验证码失败');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (loginMethod === 'password') {
+      if (!username.trim() || !password.trim()) {
+        setError('请填写用户名或邮箱以及密码');
+        return;
+      }
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: username.trim(), password }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || '登录失败');
+          return;
+        }
+        onLoginSuccess(data.token, data.user);
+      } catch {
+        setError('网络错误，请稍后重试');
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      if (!email.trim() || !code.trim()) {
+        setError('请填写邮箱和验证码');
+        return;
+      }
+      setLoading(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/login-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), code: code.trim() }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || '登录失败');
+          return;
+        }
+        onLoginSuccess(data.token, data.user);
+      } catch {
+        setError('网络错误，请稍后重试');
+      } finally {
+        setLoading(false);
+      }
+    }
   };
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim() || !nickname.trim() || !securityQuestion.trim() || !securityAnswer.trim()) {
-      setError('请填写所有注册字段'); return;
+    if (!username.trim() || !password.trim() || !email.trim() || !code.trim()) {
+      setError('请填写所有必要注册字段');
+      return;
     }
-    if (password.length < 6) { setError('密码长度不能少于6位'); return; }
+    if (password.length < 6) {
+      setError('密码长度不能少于6位');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('两次输入的密码不一致');
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -59,61 +170,69 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
           username: username.trim(),
           password,
           nickname: nickname.trim(),
-          security_question: securityQuestion.trim(),
-          security_answer: securityAnswer.trim(),
+          email: email.trim(),
+          code: code.trim(),
         }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || '注册失败'); return; }
+      if (!res.ok) {
+        setError(data.error || '注册失败');
+        return;
+      }
       onLoginSuccess(data.token, data.user);
-    } catch { setError('网络错误，请稍后重试'); }
-    finally { setLoading(false); }
+    } catch {
+      setError('网络错误，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleForgot = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (forgotStep === 'question') {
-      if (!username.trim()) { setError('请输入用户名'); return; }
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_BASE}/api/auth/question?username=${encodeURIComponent(username.trim())}`);
-        if (!res.ok) { setError('用户名不存在'); return; }
-        const data = await res.json();
-        setSecurityQuestion(data.security_question);
-        setForgotStep('reset');
-      } catch { setError('网络错误，请稍后重试'); }
-      finally { setLoading(false); }
-    } else {
-      if (!forgotAnswer.trim() || !forgotNewPwd.trim()) { setError('请填写答案和新密码'); return; }
-      if (forgotNewPwd.length < 6) { setError('新密码不能少于6位'); return; }
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: username.trim(),
-            security_answer: forgotAnswer.trim(),
-            new_password: forgotNewPwd,
-          }),
-        });
-        if (!res.ok) { const d = await res.json(); setError(d.error || '重置密码失败'); return; }
-        setMode('login');
-        setForgotStep('question');
-        setForgotAnswer('');
-        setForgotNewPwd('');
-      } catch { setError('网络错误，请稍后重试'); }
-      finally { setLoading(false); }
+    if (!email.trim() || !code.trim() || !forgotNewPwd.trim()) {
+      setError('请填写所有必填字段');
+      return;
+    }
+    if (forgotNewPwd.length < 6) {
+      setError('新密码不能少于6位');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          code: code.trim(),
+          new_password: forgotNewPwd,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || '重置密码失败');
+        return;
+      }
+      alert('密码重置成功，请重新登录！');
+      switchMode('login');
+    } catch {
+      setError('网络错误，请稍后重试');
+    } finally {
+      setLoading(false);
     }
   };
 
   const switchMode = (newMode: Mode) => {
     setMode(newMode);
     clearError();
-    setForgotStep('question');
-    setForgotAnswer('');
-    setForgotNewPwd('');
+    setCode('');
+    setConfirmPassword('');
+    setCountdown(0);
+    setShowLoginPwd(false);
+    setShowRegPwd(false);
+    setShowRegConfirm(false);
+    setShowForgotPwd(false);
   };
 
   return (
@@ -157,14 +276,6 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
           height: 40px;
           filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
         }
-        .auth-logo-text {
-          font-size: 24px;
-          font-weight: 800;
-          letter-spacing: -0.5px;
-          background: linear-gradient(135deg, var(--brand-blue) 0%, var(--brand-yellow) 100%);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-        }
         .auth-header {
           display: flex;
           flex-direction: column;
@@ -201,13 +312,16 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
         }
         .auth-input-wrapper input {
           width: 100%;
-          padding: 11px 16px;
+          padding: 11px 44px 11px 16px;
           border: 1px solid var(--border);
           border-radius: 12px;
           background: var(--bg-paper);
           color: var(--text);
           font-size: 14px;
           transition: all 0.2s ease;
+        }
+        .auth-input-wrapper input[data-plain] {
+          padding-right: 16px;
         }
         .auth-input-wrapper input:focus {
           border-color: var(--brand-blue);
@@ -217,15 +331,88 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
         [data-theme="dark"] .auth-input-wrapper input:focus {
           box-shadow: 0 0 0 3px rgba(74, 129, 173, 0.2);
         }
-        .auth-question-banner {
-          font-size: 13px;
-          padding: 12px;
-          border: 1px solid var(--border);
+        .auth-eye-btn {
+          position: absolute;
+          right: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          color: var(--text-dim);
+          cursor: pointer;
+          padding: 4px;
+          display: flex;
+          align-items: center;
+          border-radius: 6px;
+          transition: color 0.15s;
+          line-height: 0;
+        }
+        .auth-eye-btn:hover { color: var(--text); }
+        .auth-tab-group {
+          display: flex;
+          border-bottom: 1.5px solid var(--border);
+          margin-bottom: 8px;
+        }
+        .auth-tab-btn {
+          flex: 1;
+          background: none;
+          border: none;
+          color: var(--text-dim);
+          padding: 10px 0;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          position: relative;
+          transition: color 0.2s;
+        }
+        .auth-tab-btn.active {
+          color: var(--brand-blue);
+        }
+        [data-theme="dark"] .auth-tab-btn.active {
+          color: var(--brand-yellow);
+        }
+        .auth-tab-btn.active::after {
+          content: '';
+          position: absolute;
+          bottom: -1.5px;
+          left: 0;
+          width: 100%;
+          height: 2px;
+          background: var(--brand-blue);
+        }
+        [data-theme="dark"] .auth-tab-btn.active::after {
+          background: var(--brand-yellow);
+        }
+        .auth-code-wrapper {
+          display: flex;
+          gap: 10px;
+        }
+        .auth-code-wrapper input {
+          flex: 1;
+        }
+        .auth-getcode-btn {
+          padding: 11px 16px;
           border-radius: 12px;
+          font-size: 13px;
+          font-weight: 600;
           background: var(--hover);
           color: var(--text);
-          text-align: left;
-          line-height: 1.4;
+          border: 1px solid var(--border);
+          cursor: pointer;
+          transition: all 0.2s ease;
+          white-space: nowrap;
+          min-width: 100px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .auth-getcode-btn:hover:not(:disabled) {
+          background: var(--border);
+          border-color: var(--text-dim);
+        }
+        .auth-getcode-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
         .auth-btn {
           width: 100%;
@@ -283,10 +470,6 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
         [data-theme="dark"] .auth-link-btn:hover {
           color: var(--brand-yellow);
         }
-        @keyframes logoFloat {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-4px); }
-        }
         @keyframes slideUp {
           from {
             opacity: 0;
@@ -305,66 +488,124 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
       `}</style>
 
       <div className="auth-card">
-        {/* Brandy Logo/Branding */}
+        {/* Brandy Logo */}
         <div className="auth-logo-area">
           <img src="/favicon.svg" alt="Brandy" className="auth-logo-icon" />
         </div>
 
-        {/* Dynamic Titles */}
+        {/* Header */}
         <div className="auth-header">
           <div className="auth-title">
             {mode === 'login' && '登录 Brandy'}
             {mode === 'register' && '创建新账号'}
-            {mode === 'forgot_answer' && '重置账户密码'}
+            {mode === 'forgot_code' && '重置账户密码'}
           </div>
           <div className="auth-subtitle">
-            {mode === 'register' && '通过密保问题保障您的账户安全'}
-            {mode === 'forgot_answer' && forgotStep === 'question' ? '第 1 步：输入您的用户名' : mode === 'forgot_answer' && '第 2 步：验证密保并输入新密码'}
+            {mode === 'register' && '通过电子邮箱保障您的账户安全'}
+            {mode === 'forgot_code' && '使用邮箱验证码重置您的密码'}
           </div>
         </div>
 
-        {/* Error notification banner */}
+        {/* Error Notification */}
         {error && <div className="auth-error">{error}</div>}
 
-        {/* LOGIN FORM */}
+        {/* LOGIN MODE */}
         {mode === 'login' && (
           <form onSubmit={handleLogin} className="auth-form">
-            <div className="auth-input-wrapper">
-              <input
-                type="text"
-                placeholder="用户名"
-                value={username}
-                onChange={e => { setUsername(e.target.value); clearError(); }}
-                autoFocus
-                disabled={loading}
-              />
+            <div className="auth-tab-group">
+              <button
+                type="button"
+                className={`auth-tab-btn ${loginMethod === 'password' ? 'active' : ''}`}
+                onClick={() => { setLoginMethod('password'); clearError(); }}
+              >
+                密码登录
+              </button>
+              <button
+                type="button"
+                className={`auth-tab-btn ${loginMethod === 'code' ? 'active' : ''}`}
+                onClick={() => { setLoginMethod('code'); clearError(); }}
+              >
+                验证码登录
+              </button>
             </div>
-            <div className="auth-input-wrapper">
-              <input
-                type="password"
-                placeholder="密码"
-                value={password}
-                onChange={e => { setPassword(e.target.value); clearError(); }}
-                disabled={loading}
-              />
-            </div>
+
+            {loginMethod === 'password' ? (
+              <>
+                <div className="auth-input-wrapper">
+                  <input
+                    type="text"
+                    placeholder="用户名 或 电子邮箱"
+                    value={username}
+                    onChange={e => { setUsername(e.target.value); clearError(); }}
+                    autoFocus
+                    disabled={loading}
+                  />
+                </div>
+                <div className="auth-input-wrapper">
+                  <input
+                    type={showLoginPwd ? 'text' : 'password'}
+                    placeholder="密码"
+                    value={password}
+                    onChange={e => { setPassword(e.target.value); clearError(); }}
+                    disabled={loading}
+                  />
+                  <button type="button" className="auth-eye-btn" tabIndex={-1} onClick={() => setShowLoginPwd(v => !v)}>
+                    {showLoginPwd ? <EyeOffIcon /> : <EyeIcon />}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="auth-input-wrapper">
+                  <input
+                    type="text"
+                    placeholder="电子邮箱"
+                    value={email}
+                    onChange={e => { setEmail(e.target.value); clearError(); }}
+                    autoFocus
+                    disabled={loading}
+                  />
+                </div>
+                <div className="auth-code-wrapper">
+                  <div className="auth-input-wrapper" style={{ flex: 1 }}>
+                    <input
+                      type="text"
+                      placeholder="6位验证码"
+                      value={code}
+                      onChange={e => { setCode(e.target.value); clearError(); }}
+                      maxLength={6}
+                      disabled={loading}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="auth-getcode-btn"
+                    disabled={loading || sending || countdown > 0}
+                    onClick={() => handleSendCode('login', email)}
+                  >
+                    {countdown > 0 ? `${countdown}s` : sending ? '发送中...' : '获取验证码'}
+                  </button>
+                </div>
+              </>
+            )}
+
             <button type="submit" className="auth-btn" disabled={loading}>
               {loading ? '正在登录...' : '登录'}
             </button>
             <div className="auth-footer">
               <button type="button" className="auth-link-btn" onClick={() => switchMode('register')}>注册账号</button>
-              <button type="button" className="auth-link-btn" onClick={() => switchMode('forgot_answer')}>忘记密码</button>
+              <button type="button" className="auth-link-btn" onClick={() => switchMode('forgot_code')}>忘记密码</button>
             </div>
           </form>
         )}
 
-        {/* REGISTER FORM */}
+        {/* REGISTER MODE */}
         {mode === 'register' && (
           <form onSubmit={handleRegister} className="auth-form">
             <div className="auth-input-wrapper">
               <input
                 type="text"
-                placeholder="用户名 (英文字母/数字)"
+                placeholder="用户名 (用于登录/唯一标识)"
                 value={username}
                 onChange={e => { setUsername(e.target.value); clearError(); }}
                 autoFocus
@@ -382,30 +623,56 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
             </div>
             <div className="auth-input-wrapper">
               <input
-                type="password"
-                placeholder="密码 (至少 6 位)"
+                type="text"
+                placeholder="电子邮箱"
+                value={email}
+                onChange={e => { setEmail(e.target.value); clearError(); }}
+                disabled={loading}
+              />
+            </div>
+            <div className="auth-code-wrapper">
+              <div className="auth-input-wrapper" style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  placeholder="6位验证码"
+                  value={code}
+                  onChange={e => { setCode(e.target.value); clearError(); }}
+                  maxLength={6}
+                  disabled={loading}
+                />
+              </div>
+              <button
+                type="button"
+                className="auth-getcode-btn"
+                disabled={loading || sending || countdown > 0}
+                onClick={() => handleSendCode('register', email)}
+              >
+                {countdown > 0 ? `${countdown}s` : sending ? '发送中...' : '获取验证码'}
+              </button>
+            </div>
+            <div className="auth-input-wrapper">
+              <input
+                type={showRegPwd ? 'text' : 'password'}
+                placeholder="设置密码 (至少 6 位)"
                 value={password}
                 onChange={e => { setPassword(e.target.value); clearError(); }}
                 disabled={loading}
               />
+              <button type="button" className="auth-eye-btn" tabIndex={-1} onClick={() => setShowRegPwd(v => !v)}>
+                {showRegPwd ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
             </div>
             <div className="auth-input-wrapper">
               <input
-                type="text"
-                placeholder="密保问题 (如：我最喜欢的食物)"
-                value={securityQuestion}
-                onChange={e => { setSecurityQuestion(e.target.value); clearError(); }}
+                type={showRegConfirm ? 'text' : 'password'}
+                placeholder="确认密码"
+                value={confirmPassword}
+                onChange={e => { setConfirmPassword(e.target.value); clearError(); }}
                 disabled={loading}
               />
-            </div>
-            <div className="auth-input-wrapper">
-              <input
-                type="text"
-                placeholder="密保答案"
-                value={securityAnswer}
-                onChange={e => { setSecurityAnswer(e.target.value); clearError(); }}
-                disabled={loading}
-              />
+              <button type="button" className="auth-eye-btn" tabIndex={-1} onClick={() => setShowRegConfirm(v => !v)}>
+                {showRegConfirm ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
             </div>
             <button type="submit" className="auth-btn" disabled={loading}>
               {loading ? '正在注册...' : '立即注册'}
@@ -416,55 +683,54 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
           </form>
         )}
 
-        {/* FORGOT PASSWORD FORM */}
-        {mode === 'forgot_answer' && (
+        {/* FORGOT PASSWORD MODE */}
+        {mode === 'forgot_code' && (
           <form onSubmit={handleForgot} className="auth-form">
-            {forgotStep === 'question' ? (
-              <>
-                <div className="auth-input-wrapper">
-                  <input
-                    type="text"
-                    placeholder="输入用户名"
-                    value={username}
-                    onChange={e => { setUsername(e.target.value); clearError(); }}
-                    autoFocus
-                    disabled={loading}
-                  />
-                </div>
-                <button type="submit" className="auth-btn" disabled={loading}>
-                  {loading ? '正在查询...' : '查询密保问题'}
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="auth-question-banner">
-                  <strong>密保问题：</strong>
-                  <div>{securityQuestion}</div>
-                </div>
-                <div className="auth-input-wrapper">
-                  <input
-                    type="text"
-                    placeholder="回答密保答案"
-                    value={forgotAnswer}
-                    onChange={e => { setForgotAnswer(e.target.value); clearError(); }}
-                    autoFocus
-                    disabled={loading}
-                  />
-                </div>
-                <div className="auth-input-wrapper">
-                  <input
-                    type="password"
-                    placeholder="输入新密码 (至少 6 位)"
-                    value={forgotNewPwd}
-                    onChange={e => { setForgotNewPwd(e.target.value); clearError(); }}
-                    disabled={loading}
-                  />
-                </div>
-                <button type="submit" className="auth-btn" disabled={loading}>
-                  {loading ? '正在重置...' : '重置并应用新密码'}
-                </button>
-              </>
-            )}
+            <div className="auth-input-wrapper">
+              <input
+                type="text"
+                placeholder="绑定电子邮箱"
+                value={email}
+                onChange={e => { setEmail(e.target.value); clearError(); }}
+                autoFocus
+                disabled={loading}
+              />
+            </div>
+            <div className="auth-code-wrapper">
+              <div className="auth-input-wrapper" style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  placeholder="6位验证码"
+                  value={code}
+                  onChange={e => { setCode(e.target.value); clearError(); }}
+                  maxLength={6}
+                  disabled={loading}
+                />
+              </div>
+              <button
+                type="button"
+                className="auth-getcode-btn"
+                disabled={loading || sending || countdown > 0}
+                onClick={() => handleSendCode('reset', email)}
+              >
+                {countdown > 0 ? `${countdown}s` : sending ? '发送中...' : '获取验证码'}
+              </button>
+            </div>
+            <div className="auth-input-wrapper">
+              <input
+                type={showForgotPwd ? 'text' : 'password'}
+                placeholder="输入新密码 (至少 6 位)"
+                value={forgotNewPwd}
+                onChange={e => { setForgotNewPwd(e.target.value); clearError(); }}
+                disabled={loading}
+              />
+              <button type="button" className="auth-eye-btn" tabIndex={-1} onClick={() => setShowForgotPwd(v => !v)}>
+                {showForgotPwd ? <EyeOffIcon /> : <EyeIcon />}
+              </button>
+            </div>
+            <button type="submit" className="auth-btn" disabled={loading}>
+              {loading ? '正在重置...' : '重置并应用新密码'}
+            </button>
             <div className="auth-footer">
               <button type="button" className="auth-link-btn" onClick={() => switchMode('login')}>返回登录</button>
               <button type="button" className="auth-link-btn" onClick={() => switchMode('register')}>注册账号</button>

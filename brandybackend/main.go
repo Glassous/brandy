@@ -52,7 +52,8 @@ func main() {
 	{
 		auth.POST("/register", handlers.Register)
 		auth.POST("/login", handlers.Login)
-		auth.GET("/question", handlers.GetSecurityQuestion)
+		auth.POST("/send-code", handlers.SendVerificationCode)
+		auth.POST("/login-code", handlers.LoginWithCode)
 		auth.POST("/reset-password", handlers.ResetPassword)
 	}
 
@@ -63,6 +64,7 @@ func main() {
 		// User profile
 		api.GET("/user/profile", handlers.GetProfile)
 		api.PUT("/user/profile", handlers.UpdateProfile)
+		api.POST("/user/change-password", handlers.ChangePassword)
 		api.POST("/user/avatar", handlers.UploadAvatar)
 		api.GET("/users/search", handlers.SearchUser)
 
