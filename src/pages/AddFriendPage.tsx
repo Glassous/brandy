@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import { Avatar } from '../components/shared/Avatar';
-
-const API_BASE = 'http://localhost:8181';
+import { API_BASE } from '../config';
 
 export function AddFriendPage() {
   const { addFriend, friends, user, token } = useApp();

@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../shared/Avatar';
 import { useApp, type Message } from '../../contexts/AppContext';
 import { useToast } from '../shared/Toast';
-
-const API_BASE = 'http://localhost:8181';
+import { API_BASE } from '../../config';
 
 interface ChatRoomProps {
   currentUserId: string;

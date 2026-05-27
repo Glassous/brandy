@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { User } from '../../contexts/AppContext';
-
-const API_BASE = 'http://localhost:8181';
+import { API_BASE } from '../../config';
 
 interface AuthShellProps {
   onLoginSuccess: (token: string, user: User) => void;

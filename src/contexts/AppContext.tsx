@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { useToast } from '../components/shared/Toast';
-
-const API_BASE = 'http://localhost:8181';
+import { API_BASE, getWsUrl } from '../config';
 
 export interface User {
   id: string;
@@ -394,7 +393,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const connect = () => {
       if (wsRef.current) return;
-      const ws = new WebSocket(`ws://localhost:8181/api/ws?token=${token}`);
+      const ws = new WebSocket(getWsUrl(token));
       wsRef.current = ws;
 
       ws.onmessage = (e) => {

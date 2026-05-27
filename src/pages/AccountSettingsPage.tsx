@@ -3,8 +3,7 @@ import { useApp } from '../contexts/AppContext';
 import { Avatar } from '../components/shared/Avatar';
 import { AvatarCropper } from '../components/shared/AvatarCropper';
 import { Link } from 'react-router-dom';
-
-const API_BASE = 'http://localhost:8181';
+import { API_BASE } from '../config';
 
 const EyeIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

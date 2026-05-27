@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { useToast } from '../components/shared/Toast';
 import COS from 'cos-js-sdk-v5';
-
-const API_BASE = 'http://localhost:8181';
+import { API_BASE } from '../config';
 
 interface DiskItem {
   id: string;
