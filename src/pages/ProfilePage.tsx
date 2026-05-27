@@ -24,6 +24,9 @@ export function ProfilePage() {
           display: flex;
           flex-direction: column;
           gap: 12px;
+          max-width: 600px;
+          width: 100%;
+          margin: 0 auto;
         }
         .setting-item {
           display: flex;

@@ -14,6 +14,7 @@ interface ChatRoomProps {
   messages: Message[];
   onSend: (receiverId: string, content: string) => void;
   onLoad: (friendId: string) => Promise<void>;
+  onBack?: () => void;
 }
 
 interface FileShareData {
@@ -177,7 +178,7 @@ function formatTime(ts: string) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, messages, onSend, onLoad }: ChatRoomProps) {
+export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, messages, onSend, onLoad, onBack }: ChatRoomProps) {
   const [text, setText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -209,6 +210,9 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           flex-shrink: 0;
           background: var(--bg);
         }
+        .cr-back-btn {
+          display: none;
+        }
         .cr-name {
           font-weight: 700;
           font-size: 15px;
@@ -223,6 +227,30 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           transition: color 0.2s, background-color 0.2s;
         }
         .cr-info:hover { color: var(--brand-blue); background: var(--hover); }
+        
+        @media (max-width: 768px) {
+          .cr-back-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            color: var(--text);
+            padding: 6px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: background-color 0.2s;
+          }
+          .cr-back-btn:hover {
+            background: var(--hover);
+          }
+          .msg-bubble {
+            max-width: 85% !important;
+          }
+          .cr-input-bar {
+            padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+          }
+        }
  
         .cr-msgs {
           flex: 1;
@@ -433,6 +461,14 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
  
       {/* Header Info */}
       <div className="cr-header">
+        {onBack && (
+          <button className="cr-back-btn" onClick={onBack} title="返回会话列表">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+        )}
         <span className="cr-name">{friendName || '聊天'}</span>
         <button className="cr-info" title="查看资料" onClick={handleShowDetails}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

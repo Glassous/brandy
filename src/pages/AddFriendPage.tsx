@@ -105,6 +105,9 @@ export function AddFriendPage() {
           padding: 40px 24px;
           gap: 24px;
           overflow-y: auto;
+          max-width: 600px;
+          width: 100%;
+          margin: 0 auto;
         }
         .af-title-group {
           text-align: center;

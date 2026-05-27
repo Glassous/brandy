@@ -94,7 +94,7 @@ export function AccountSettingsPage() {
         .ac-back-btn { background:none;color:var(--text);padding:6px;display:flex;align-items:center;border-radius:50%;transition:background-color 0.2s; }
         .ac-back-btn:hover { background:var(--hover); }
         .ac-header-title { font-weight:700;font-size:15px; }
-        .ac-content { flex:1;overflow-y:auto; }
+        .ac-content { flex:1;overflow-y:auto; max-width:600px; width:100%; margin:0 auto; }
         .pf-section { padding:24px 16px;border-bottom:1px solid var(--border); }
         .pf-section:last-of-type { border-bottom:none; }
         .pf-section-title { font-size:12px;font-weight:700;color:var(--text-dim);letter-spacing:0.5px;text-transform:uppercase;margin-bottom:14px; }

@@ -64,7 +64,7 @@ export function ChatPage() {
   }, [loadChatMessages]);
 
   return (
-    <div className="chat-page-container">
+    <div className={`chat-page-container ${activeChatFriendId ? 'has-active-chat' : ''}`}>
       <style>{`
         .chat-page-container {
           display: flex;
@@ -82,6 +82,19 @@ export function ChatPage() {
           flex-shrink: 0;
           background: var(--bg-paper);
         }
+        .chat-header {
+          display: flex;
+          align-items: center;
+          height: 48px;
+          padding: 0 16px;
+          border-bottom: 1px solid var(--border);
+          flex-shrink: 0;
+          background: var(--bg);
+        }
+        .chat-header-title {
+          font-weight: 700;
+          font-size: 15px;
+        }
         .chat-sidebar-list {
           flex: 1;
           overflow-y: auto;
@@ -94,6 +107,19 @@ export function ChatPage() {
           overflow: hidden;
           background: var(--bg-paper);
         }
+        
+        @media (max-width: 768px) {
+          .chat-sidebar {
+            width: 100% !important;
+          }
+          .chat-page-container.has-active-chat .chat-sidebar {
+            display: none !important;
+          }
+          .chat-page-container:not(.has-active-chat) .chat-content-pane {
+            display: none !important;
+          }
+        }
+
         .chat-placeholder {
           flex: 1;
           display: flex;
@@ -132,6 +158,9 @@ export function ChatPage() {
 
       {/* Left Pane: Chat List */}
       <div className="chat-sidebar">
+        <div className="chat-header">
+          <span className="chat-header-title">聊天</span>
+        </div>
         <div className="chat-sidebar-list">
           <ChatList
             chats={displayedChats}
@@ -156,6 +185,7 @@ export function ChatPage() {
             messages={messages}
             onSend={(fid, content) => handleSend(fid, content)}
             onLoad={handleLoad}
+            onBack={() => setActiveChatFriendId(null)}
           />
         ) : (
           <div className="chat-placeholder">

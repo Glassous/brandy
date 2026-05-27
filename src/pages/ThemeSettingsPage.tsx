@@ -2,12 +2,10 @@ import { useTheme } from '../contexts/ThemeContext';
 import { Link } from 'react-router-dom';
 
 export function ThemeSettingsPage() {
-  const { theme, toggle } = useTheme();
+  const { theme, setTheme } = useTheme();
 
-  const handleSelectTheme = (selected: 'light' | 'dark') => {
-    if (theme !== selected) {
-      toggle();
-    }
+  const handleSelectTheme = (selected: 'light' | 'dark' | 'system') => {
+    setTheme(selected);
   };
 
   return (
@@ -45,6 +43,9 @@ export function ThemeSettingsPage() {
           display: flex;
           flex-direction: column;
           gap: 20px;
+          max-width: 600px;
+          width: 100%;
+          margin: 0 auto;
         }
         .tm-title {
           font-size: 14px;
@@ -57,6 +58,12 @@ export function ThemeSettingsPage() {
           display: flex;
           gap: 16px;
           width: 100%;
+        }
+        @media (max-width: 480px) {
+          .tm-cards-container {
+            flex-direction: column;
+            gap: 12px;
+          }
         }
         .tm-card {
           flex: 1;
@@ -96,6 +103,9 @@ export function ThemeSettingsPage() {
         }
         .tm-preview-dark {
           background: #1B1915;
+        }
+        .tm-preview-system {
+          background: linear-gradient(135deg, #F9F6F0 50%, #1B1915 50%);
         }
         .tm-preview-inner {
           position: absolute;
@@ -193,6 +203,33 @@ export function ThemeSettingsPage() {
             <span className="tm-card-label">
               深色模式
               {theme === 'dark' && (
+                <span className="tm-check-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </span>
+              )}
+            </span>
+          </div>
+
+          {/* System Theme Card */}
+          <div 
+            className={`tm-card ${theme === 'system' ? 'active' : ''}`}
+            onClick={() => handleSelectTheme('system')}
+          >
+            <div className="tm-preview-box tm-preview-system">
+              <div className="tm-preview-inner" style={{ left: 10, right: 'auto', width: '35%' }}>
+                <div className="tm-preview-line short" style={{ background: '#D4B87A' }} />
+                <div className="tm-preview-line" style={{ background: '#E5DFD0' }} />
+              </div>
+              <div className="tm-preview-inner" style={{ left: 'auto', right: 10, width: '35%' }}>
+                <div className="tm-preview-line short" style={{ background: '#E5C68A' }} />
+                <div className="tm-preview-line" style={{ background: '#3D372C' }} />
+              </div>
+            </div>
+            <span className="tm-card-label">
+              跟随系统
+              {theme === 'system' && (
                 <span className="tm-check-icon">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20 6 9 17 4 12" />

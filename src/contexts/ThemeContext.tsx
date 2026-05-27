@@ -1,30 +1,60 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 
-type Theme = 'light' | 'dark';
+export type ThemeChoice = 'light' | 'dark' | 'system';
 
 interface ThemeCtx {
-  theme: Theme;
-  toggle: () => void;
+  theme: ThemeChoice;
+  setTheme: (theme: ThemeChoice) => void;
 }
 
-const ThemeContext = createContext<ThemeCtx>({ theme: 'light', toggle: () => {} });
+const ThemeContext = createContext<ThemeCtx>({ theme: 'system', setTheme: () => {} });
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => {
+  const [theme, setThemeState] = useState<ThemeChoice>(() => {
     const stored = localStorage.getItem('theme');
-    if (stored === 'dark' || stored === 'light') return stored;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    if (stored === 'dark' || stored === 'light' || stored === 'system') return stored;
+    return 'system';
   });
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
+    if (theme !== 'system') {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('theme', theme);
+      return;
+    }
+
+    localStorage.setItem('theme', 'system');
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+    };
+
+    // Set initial
+    handleChange(mediaQuery);
+
+    // Add listener
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+    } else {
+      mediaQuery.addListener(handleChange);
+    }
+
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener('change', handleChange);
+      } else {
+        mediaQuery.removeListener(handleChange);
+      }
+    };
   }, [theme]);
 
-  const toggle = useCallback(() => setTheme(t => (t === 'light' ? 'dark' : 'light')), []);
+  const setTheme = useCallback((t: ThemeChoice) => {
+    setThemeState(t);
+  }, []);
 
   return (
-    <ThemeContext.Provider value={{ theme, toggle }}>
+    <ThemeContext.Provider value={{ theme, setTheme }}>
       {children}
     </ThemeContext.Provider>
   );

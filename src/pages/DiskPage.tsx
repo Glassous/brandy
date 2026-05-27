@@ -190,7 +190,7 @@ export function DiskPage() {
 
         // B. 初始化 COS 客户端
         const cos = new COS({
-          getAuthorization: (options, callback) => {
+          getAuthorization: (_options, callback) => {
             callback({
               TmpSecretId: credentials.tmpSecretId,
               TmpSecretKey: credentials.tmpSecretKey,
@@ -247,7 +247,7 @@ export function DiskPage() {
               };
             }));
           },
-        }, async (err, data) => {
+        }, async (err, _data) => {
           if (err) {
             const errorObj = err as any;
             const isCancel = errorObj.error === 'cancelled' || 
@@ -824,6 +824,82 @@ export function DiskPage() {
           border-color: var(--text);
         }
 
+        .item-name-details {
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .item-name-text {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .item-meta-mobile {
+          display: none;
+          font-size: 11px;
+          color: var(--text-dim);
+          margin-top: 2px;
+        }
+        .btn-text {
+          margin-left: 6px;
+        }
+
+        @media (max-width: 768px) {
+          .btn-text {
+            display: none;
+          }
+          .disk-header {
+            height: auto !important;
+            min-height: 56px;
+            padding: 8px 16px !important;
+            flex-wrap: wrap;
+            gap: 8px !important;
+          }
+          .top-usage-container {
+            max-width: none !important;
+            width: 100% !important;
+            order: 3;
+            margin: 4px 0 !important;
+          }
+          .breadcrumbs {
+            order: 1;
+          }
+          .header-actions {
+            order: 2;
+          }
+          .list-header {
+            display: none !important;
+          }
+          .item-row {
+            grid-template-columns: 1fr auto !important;
+            padding: 10px 12px !important;
+            gap: 12px !important;
+          }
+          .item-size-col, .item-time-col {
+            display: none !important;
+          }
+          .item-actions-col {
+            opacity: 1 !important;
+            display: flex;
+            gap: 4px;
+          }
+          .action-icon-btn {
+            padding: 6px !important;
+          }
+          .disk-list-pane {
+            padding: 8px 16px !important;
+          }
+          .item-meta-mobile {
+            display: inline !important;
+          }
+          .upload-queue-panel {
+            width: calc(100% - 32px) !important;
+            left: 16px !important;
+            right: 16px !important;
+            bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+          }
+        }
+
         /* Top Space Capacity & Actions Header styling */
         .top-usage-container {
           display: flex;
@@ -1073,12 +1149,12 @@ export function DiskPage() {
           {/* Operation Buttons */}
           <div className="header-actions">
             <button className="btn" onClick={() => fileInputRef.current?.click()}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="17 8 12 3 7 8" />
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
-              上传文件
+              <span className="btn-text">上传文件</span>
             </button>
             <input
               type="file"
@@ -1089,16 +1165,16 @@ export function DiskPage() {
             />
 
             <button className="btn btn-secondary" onClick={() => setShowNewFolderModal(true)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                 <line x1="12" y1="11" x2="12" y2="17" />
                 <line x1="9" y1="14" x2="15" y2="14" />
               </svg>
-              新建文件夹
+              <span className="btn-text">新建文件夹</span>
             </button>
 
             <button className="btn btn-secondary" onClick={() => setShowUploadList(prev => !prev)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="8" y1="6" x2="21" y2="6" />
                 <line x1="8" y1="12" x2="21" y2="12" />
                 <line x1="8" y1="18" x2="21" y2="18" />
@@ -1106,7 +1182,9 @@ export function DiskPage() {
                 <line x1="3" y1="12" x2="3.01" y2="12" />
                 <line x1="3" y1="18" x2="3.01" y2="18" />
               </svg>
-              传输列表 {uploadTasks.filter(t => t.status === 'uploading' || t.status === 'pending').length > 0 ? `(${uploadTasks.filter(t => t.status === 'uploading' || t.status === 'pending').length})` : ''}
+              <span className="btn-text">
+                传输列表 {uploadTasks.filter(t => t.status === 'uploading' || t.status === 'pending').length > 0 ? `(${uploadTasks.filter(t => t.status === 'uploading' || t.status === 'pending').length})` : ''}
+              </span>
             </button>
           </div>
         </div>
@@ -1155,7 +1233,12 @@ export function DiskPage() {
                     ) : (
                       <span className="item-icon">{getFileIcon(item.name)}</span>
                     )}
-                    <span title={item.name}>{item.name}</span>
+                    <div className="item-name-details">
+                      <span className="item-name-text" title={item.name}>{item.name}</span>
+                      <span className="item-meta-mobile">
+                        {item.type === 'file' ? formatBytes(item.size) : '文件夹'} • {new Date(item.updated_at).toLocaleDateString()}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Size Column */}

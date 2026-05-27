@@ -253,6 +253,9 @@ export function ContactsPage() {
           padding: 40px 24px;
           gap: 24px;
           text-align: center;
+          max-width: 480px;
+          width: 100%;
+          margin: 0 auto;
         }
         .ct-detail-avatar-wrapper {
           position: relative;
