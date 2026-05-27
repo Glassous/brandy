@@ -223,7 +223,7 @@ export function useUploadProgress() {
     progress: number;
     status: 'uploading' | 'completed' | 'error';
     errorMessage?: string;
-    xhr?: XMLHttpRequest;
+    cancelFn?: () => void;
   }>({
     active: false,
     fileName: '',
@@ -259,14 +259,14 @@ export function useUploadProgress() {
   };
 
   const cancelUpload = () => {
-    if (uploadState.xhr) {
-      uploadState.xhr.abort();
+    if (uploadState.cancelFn) {
+      uploadState.cancelFn();
     }
     setUploadState(prev => ({ ...prev, active: false }));
   };
 
-  const setXhr = (xhr: XMLHttpRequest) => {
-    setUploadState(prev => ({ ...prev, xhr }));
+  const setCancelFn = (cancelFn: () => void) => {
+    setUploadState(prev => ({ ...prev, cancelFn }));
   };
 
   return {
@@ -276,6 +276,6 @@ export function useUploadProgress() {
     completeUpload,
     errorUpload,
     cancelUpload,
-    setXhr,
+    setCancelFn,
   };
 }

@@ -10,6 +10,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.73
+	github.com/tencentyun/qcloud-cos-sts-sdk v0.0.0-20251226100129-1701383cae15
 	go.mongodb.org/mongo-driver v1.17.1
 	golang.org/x/crypto v0.32.0
 )

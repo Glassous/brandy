@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tencentyun/cos-go-sdk-v5"
+	sts "github.com/tencentyun/qcloud-cos-sts-sdk/go"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -50,6 +51,14 @@ func getCOSClient() (*cos.Client, string, string, string, error) {
 		},
 	})
 	return client, bucket, region, customDomain, nil
+}
+
+func getAppIDFromBucket(bucket string) string {
+	parts := strings.Split(bucket, "-")
+	if len(parts) > 1 {
+		return parts[len(parts)-1]
+	}
+	return ""
 }
 
 // Helper to calculate used space
@@ -208,64 +217,95 @@ func CreateFolder(c *gin.Context) {
 	c.JSON(http.StatusOK, newFolder)
 }
 
-// 4. 上传文件与限额校验
-func UploadDiskFile(c *gin.Context) {
+// 4. 获取上传临时凭据
+type UploadCredentialReq struct {
+	Filename string `json:"filename" binding:"required"`
+	Size     int64  `json:"size" binding:"required"`
+	ParentID string `json:"parent_id"`
+}
+
+func GetUploadCredential(c *gin.Context) {
 	userIDStr := c.GetString("userID")
 	userID, _ := primitive.ObjectIDFromHex(userIDStr)
 
-	parentIDStr := c.PostForm("parent_id")
-	var parentFilter *primitive.ObjectID
-	if parentIDStr != "" && parentIDStr != "root" {
-		pid, err := primitive.ObjectIDFromHex(parentIDStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid parent_id"})
-			return
-		}
-		parentFilter = &pid
-	}
-
-	file, err := c.FormFile("file")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded"})
+	var req UploadCredentialReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Validate user's space usage
+	// 1. Verify user capacity
 	usedSpace, err := calculateUsedSpace(ctx, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify usage space"})
 		return
 	}
 
-	if usedSpace+file.Size > DiskLimit {
+	if usedSpace+req.Size > DiskLimit {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 200MB）"})
 		return
 	}
 
-	// Prepare COS Client
-	client, _, _, customDomain, err := getCOSClient()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
-		return
-	}
-
-	srcFile, err := file.Open()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open uploaded file"})
-		return
-	}
-	defer srcFile.Close()
-
-	ext := strings.ToLower(filepath.Ext(file.Filename))
+	// 2. Generate unique cosKey
+	ext := strings.ToLower(filepath.Ext(req.Filename))
 	uuidStr := uuid.New().String()
 	cosKey := fmt.Sprintf("disk/%s/%s%s", userID.Hex(), uuidStr, ext)
 
-	_, err = client.Object.Put(ctx, cosKey, srcFile, nil)
+	// 3. Get COS config
+	secretID := os.Getenv("COS_SECRET_ID")
+	secretKey := os.Getenv("COS_SECRET_KEY")
+	bucket := os.Getenv("COS_BUCKET")
+	region := os.Getenv("COS_REGION")
+	customDomain := os.Getenv("COS_CUSTOM_DOMAIN")
+
+	if secretID == "" || secretKey == "" || bucket == "" || region == "" || customDomain == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Storage configuration incomplete"})
+		return
+	}
+
+	appid := getAppIDFromBucket(bucket)
+	if appid == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse AppID from bucket name"})
+		return
+	}
+
+	// 4. Initialize STS client
+	stsClient := sts.NewClient(secretID, secretKey, nil)
+
+	// 5. Define Credential Policy
+	// Resource format: qcs::cos:<region>:uid/<appid>:<bucket>/<path>
+	resourceArn := fmt.Sprintf("qcs::cos:%s:uid/%s:%s/%s", region, appid, bucket, cosKey)
+
+	opt := &sts.CredentialOptions{
+		DurationSeconds: int64(30 * time.Minute.Seconds()), // 30 minutes
+		Region:          region,
+		Policy: &sts.CredentialPolicy{
+			Statement: []sts.CredentialPolicyStatement{
+				{
+					Action: []string{
+						"name/cos:PutObject",
+						"name/cos:PostObject",
+						"name/cos:InitiateMultipartUpload",
+						"name/cos:ListMultipartUploads",
+						"name/cos:ListParts",
+						"name/cos:UploadPart",
+						"name/cos:CompleteMultipartUpload",
+						"name/cos:AbortMultipartUpload",
+					},
+					Effect:   "allow",
+					Resource: []string{resourceArn},
+				},
+			},
+		},
+	}
+
+	// 6. Request credential
+	res, err := stsClient.GetCredential(opt)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upload to Tencent Cloud COS: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload credentials: " + err.Error()})
 		return
 	}
 
@@ -275,15 +315,103 @@ func UploadDiskFile(c *gin.Context) {
 	}
 	fileURL := fmt.Sprintf("%s/%s", domain, cosKey)
 
+	c.JSON(http.StatusOK, gin.H{
+		"credentials": gin.H{
+			"tmpSecretId":  res.Credentials.TmpSecretID,
+			"tmpSecretKey": res.Credentials.TmpSecretKey,
+			"sessionToken": res.Credentials.SessionToken,
+		},
+		"startTime":   res.StartTime,
+		"expiredTime": res.ExpiredTime,
+		"bucket":      bucket,
+		"region":      region,
+		"cosKey":      cosKey,
+		"url":         fileURL,
+	})
+}
+
+// 4b. 确认文件直传完成并校验元数据
+type UploadCompleteReq struct {
+	Filename string `json:"filename" binding:"required"`
+	Size     int64  `json:"size" binding:"required"`
+	ParentID string `json:"parent_id"`
+	CosKey   string `json:"cos_key" binding:"required"`
+	URL      string `json:"url" binding:"required"`
+}
+
+func CompleteUploadDiskFile(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	var req UploadCompleteReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 1. Verify cosKey matches the user ID to prevent path traversal/hijacking
+	expectedPrefix := fmt.Sprintf("disk/%s/", userID.Hex())
+	if !strings.HasPrefix(req.CosKey, expectedPrefix) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Invalid COS Key path"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// 2. Fetch the object metadata from COS to verify its existence and size
+	client, _, _, _, err := getCOSClient()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
+		return
+	}
+
+	resp, err := client.Object.Head(ctx, req.CosKey, nil)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File does not exist on COS: " + err.Error()})
+		return
+	}
+
+	actualSize := resp.ContentLength
+	if actualSize == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Uploaded file is empty"})
+		return
+	}
+
+	// 3. Double-check user capacity with actual size
+	usedSpace, err := calculateUsedSpace(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify usage space"})
+		return
+	}
+
+	if usedSpace+actualSize > DiskLimit {
+		// Clean up the uploaded object on COS since it exceeds quota
+		_, _ = client.Object.Delete(ctx, req.CosKey)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 200MB）"})
+		return
+	}
+
+	// 4. Save metadata in MongoDB
+	var parentFilter *primitive.ObjectID
+	if req.ParentID != "" && req.ParentID != "root" {
+		pid, err := primitive.ObjectIDFromHex(req.ParentID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid parent_id"})
+			return
+		}
+		parentFilter = &pid
+	}
+
 	newItem := models.DiskItem{
 		ID:        primitive.NewObjectID(),
 		UserID:    userID,
 		ParentID:  parentFilter,
-		Name:      file.Filename,
+		Name:      req.Filename,
 		Type:      "file",
-		Size:      file.Size,
-		CosKey:    cosKey,
-		URL:       fileURL,
+		Size:      actualSize,
+		CosKey:    req.CosKey,
+		URL:       req.URL,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
