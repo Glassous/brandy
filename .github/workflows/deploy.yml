@@ -42,7 +42,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          source: "docker-compose.yml,brandybackend/**/*"
+          source: "docker-compose.yml,brandybackend/**"
           target: ${{ secrets.BACKEND_DEPLOY_PATH }}
           rm: false
 

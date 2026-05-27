@@ -27,11 +27,23 @@
      `/opt/1panel/www/sites/brandy.glassous.top/index`
      *(这个路径就是你需要配置到 GitHub Secrets 中的 `FRONTEND_DEPLOY_PATH`)*。
 
-3. **创建后端部署目录**：
-   - 在服务器上规划一个文件夹用于存放后端的 `docker-compose` 配置。
-   - 结合你的实际配置，在服务器上创建存放目录：`/opt/brandy`。
-   - 该目录需要让你的 SSH 登录用户具有写入和执行权限。
-   - *(这个路径就是你需要配置到 GitHub Secrets 中的 `BACKEND_DEPLOY_PATH`)*。
+3. **创建后端部署目录并配置文件夹权限**：
+   - 结合你的实际配置，在服务器上创建后端存放目录：`/opt/brandy`。
+   - **关键：解决 Permission Denied（权限不足）问题**。由于 1Panel 创建的网站目录默认属于 `root` 或其他特定用户，如果你的 GitHub Secrets 中配置的 `SSH_USER` 是一个非 root 用户（例如 `ubuntu`），Actions 在上传文件时会遇到 `Permission denied` 错误。
+   - 请使用你的 SSH 账号登录服务器，运行以下命令，将部署目录的拥有者变更为当前登录的 SSH 用户（这不会影响 OpenResty 的读取）：
+     ```bash
+     # 1. 确保后端目录已创建
+     sudo mkdir -p /opt/brandy
+
+     # 2. 将前后端部署目录的拥有者变更为当前登录的 SSH 用户
+     sudo chown -R $USER:$USER /opt/1panel/www/sites/brandy.glassous.top/index
+     sudo chown -R $USER:$USER /opt/brandy
+
+     # 3. 确保目录具有正常的读写权限
+     sudo chmod -R 755 /opt/1panel/www/sites/brandy.glassous.top/index
+     sudo chmod -R 755 /opt/brandy
+     ```
+   - *(这俩路径分别就是你需要配置到 GitHub Secrets 中的 `FRONTEND_DEPLOY_PATH` 和 `BACKEND_DEPLOY_PATH`)*。
 
 4. **配置后端环境变量（安全红线 🚨）**：
    - **本地的 `.env` 配置文件绝对不能上传到 GitHub 公有仓库！**
