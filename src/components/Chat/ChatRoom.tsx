@@ -181,6 +181,73 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
   const [text, setText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const { deleteLocalMessage, deleteLocalMessages } = useApp();
+  const { showToast } = useToast();
+
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, messageId: string, content: string } | null>(null);
+  const [isMultiSelect, setIsMultiSelect] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+
+  // Close context menu on click elsewhere
+  useEffect(() => {
+    const handleCloseMenu = () => setContextMenu(null);
+    window.addEventListener('click', handleCloseMenu);
+    return () => window.removeEventListener('click', handleCloseMenu);
+  }, []);
+
+  const handleContextMenu = (e: React.MouseEvent, messageId: string, content: string) => {
+    e.preventDefault();
+    if (isMultiSelect) return;
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      messageId,
+      content
+    });
+  };
+
+  const handleCopy = (content: string) => {
+    navigator.clipboard.writeText(content);
+    showToast("已复制到剪贴板", "success");
+    setContextMenu(null);
+  };
+
+  const handleDeleteSingle = (messageId: string) => {
+    deleteLocalMessage(messageId);
+    setContextMenu(null);
+  };
+
+  const handleStartMultiSelect = (messageId: string) => {
+    setIsMultiSelect(true);
+    setSelectedMessageIds(new Set([messageId]));
+    setContextMenu(null);
+  };
+
+  const handleToggleSelect = (messageId: string) => {
+    setSelectedMessageIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  };
+
+  const handleCancelMultiSelect = () => {
+    setIsMultiSelect(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const handleConfirmDeleteMultiple = () => {
+    if (selectedMessageIds.size === 0) return;
+    if (window.confirm(`确定要删除选中的 ${selectedMessageIds.size} 条消息吗？此操作仅对本地生效，云端记录仍保留。`)) {
+      deleteLocalMessages(Array.from(selectedMessageIds));
+      setIsMultiSelect(false);
+      setSelectedMessageIds(new Set());
+    }
+  };
 
   useEffect(() => { onLoad(friendId); }, [friendId, onLoad]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -376,6 +443,61 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           font-size: 13px;
         }
 
+        /* Context Menu Styles */
+        .cr-context-menu {
+          position: fixed;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+          z-index: 1000;
+          display: flex;
+          flex-direction: column;
+          padding: 4px 0;
+          min-width: 100px;
+        }
+        .cr-context-menu-item {
+          padding: 8px 16px;
+          font-size: 13px;
+          cursor: pointer;
+          color: var(--text-primary);
+          transition: background 0.2s;
+          text-align: left;
+          background: none;
+          border: none;
+          width: 100%;
+        }
+        .cr-context-menu-item:hover {
+          background: var(--hover);
+        }
+        .cr-context-menu-item.danger {
+          color: var(--badge-unread);
+        }
+        .cr-multi-select-bar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 12px 16px;
+          background: var(--bg-card);
+          border-top: 1px solid var(--border);
+          flex-shrink: 0;
+        }
+        .cr-multi-select-info {
+          font-size: 14px;
+          font-weight: 500;
+        }
+        .cr-multi-select-actions {
+          display: flex;
+          gap: 10px;
+        }
+        .msg-checkbox {
+          margin-right: 8px;
+          width: 16px;
+          height: 16px;
+          cursor: pointer;
+          accent-color: var(--brand-blue);
+        }
+
         /* File Share Card Styles */
         .share-card-container {
           display: flex;
@@ -500,6 +622,14 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
             return (
               <div key={m.id} className="msg-container">
                 <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
+                  {isMultiSelect && (
+                    <input
+                      type="checkbox"
+                      className="msg-checkbox"
+                      checked={selectedMessageIds.has(m.id)}
+                      onChange={() => handleToggleSelect(m.id)}
+                    />
+                  )}
                   {!isOwn && (
                     isFirstOfGroup ? (
                       <Avatar name={friendName || '?'} url={friendAvatar} size={32} fontSize={13} />
@@ -507,7 +637,12 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
                       <div style={{ width: 32, flexShrink: 0 }} />
                     )
                   )}
-                  <div className={`msg-bubble ${isOwn ? 'bubble-own' : 'bubble-other'} ${isFirstOfGroup ? 'first-of-group' : 'consecutive'}`}>
+                  <div
+                    className={`msg-bubble ${isOwn ? 'bubble-own' : 'bubble-other'} ${isFirstOfGroup ? 'first-of-group' : 'consecutive'}`}
+                    onContextMenu={(e) => handleContextMenu(e, m.id, m.content)}
+                    onClick={() => isMultiSelect && handleToggleSelect(m.id)}
+                    style={{ cursor: isMultiSelect ? 'pointer' : 'default' }}
+                  >
                     {(() => {
                       let fileShareData = null;
                       if (m.content.startsWith('{')) {
@@ -538,21 +673,58 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
         <div ref={bottomRef} />
       </div>
  
-      {/* Input Sender Bar */}
-      <form onSubmit={handleSend} className="cr-input-bar">
-        <input
-          type="text"
-          placeholder="输入消息..."
-          value={text}
-          onChange={e => setText(e.target.value)}
-        />
-        <button type="submit" className="btn cr-send" disabled={!text.trim()}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13" />
-            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-          </svg>
-        </button>
-      </form>
+      {/* Input Sender Bar or Multi-Select Bar */}
+      {isMultiSelect ? (
+        <div className="cr-multi-select-bar">
+          <span className="cr-multi-select-info">已选择 {selectedMessageIds.size} 条消息</span>
+          <div className="cr-multi-select-actions">
+            <button className="btn btn-secondary" onClick={handleCancelMultiSelect}>
+              取消
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={handleConfirmDeleteMultiple}
+              disabled={selectedMessageIds.size === 0}
+            >
+              删除
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={handleSend} className="cr-input-bar">
+          <input
+            type="text"
+            placeholder="输入消息..."
+            value={text}
+            onChange={e => setText(e.target.value)}
+          />
+          <button type="submit" className="btn cr-send" disabled={!text.trim()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+        </form>
+      )}
+
+      {/* Right-click Floating Context Menu */}
+      {contextMenu && (
+        <div
+          className="cr-context-menu"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button className="cr-context-menu-item" onClick={() => handleCopy(contextMenu.content)}>
+            复制
+          </button>
+          <button className="cr-context-menu-item" onClick={() => handleStartMultiSelect(contextMenu.messageId)}>
+            多选
+          </button>
+          <button className="cr-context-menu-item danger" onClick={() => handleDeleteSingle(contextMenu.messageId)}>
+            删除
+          </button>
+        </div>
+      )}
     </div>
   );
 }

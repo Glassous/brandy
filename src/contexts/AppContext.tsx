@@ -75,6 +75,8 @@ interface AppCtx {
   togglePinChat: (friendId: string) => void;
   deleteLocalChatHistory: (friendId: string) => Promise<void>;
   deleteAllLocalChatHistories: () => Promise<void>;
+  deleteLocalMessage: (messageId: string) => Promise<void>;
+  deleteLocalMessages: (messageIds: string[]) => Promise<void>;
 }
 
 const AppContext = createContext<AppCtx | null>(null);
@@ -520,6 +522,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [user, chats, fetchChats, showToast]);
 
+  const deleteLocalMessage = useCallback(async (messageId: string) => {
+    const db = localDbRef.current;
+    if (!db) return;
+    try {
+      await db.deleteMessage(messageId);
+      setMessages(prev => prev.filter(m => m.id !== messageId));
+      showToast("消息已删除", "success");
+      fetchChats();
+    } catch (err) {
+      console.error(err);
+      showToast("删除消息失败", "error");
+    }
+  }, [fetchChats, showToast]);
+
+  const deleteLocalMessages = useCallback(async (messageIds: string[]) => {
+    const db = localDbRef.current;
+    if (!db) return;
+    try {
+      await db.deleteMessages(messageIds);
+      setMessages(prev => prev.filter(m => !messageIds.includes(m.id)));
+      showToast("选中的消息已删除", "success");
+      fetchChats();
+    } catch (err) {
+      console.error(err);
+      showToast("删除消息失败", "error");
+    }
+  }, [fetchChats, showToast]);
+
   // WebSocket connection
   useEffect(() => {
     if (!token) return;
@@ -621,6 +651,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       uploadAvatar,
       deleteLocalChatHistory,
       deleteAllLocalChatHistories,
+      deleteLocalMessage,
+      deleteLocalMessages,
     }}>
       {children}
     </AppContext.Provider>

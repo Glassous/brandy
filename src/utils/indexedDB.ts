@@ -195,4 +195,29 @@ export class LocalChatDB {
       request.onerror = () => reject(request.error);
     });
   }
+
+  deleteMessage(id: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error("Database not open"));
+      const transaction = this.db.transaction(['messages'], 'readwrite');
+      const store = transaction.objectStore('messages');
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  deleteMessages(ids: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error("Database not open"));
+      if (ids.length === 0) return resolve();
+      const transaction = this.db.transaction(['messages'], 'readwrite');
+      const store = transaction.objectStore('messages');
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      ids.forEach(id => {
+        store.delete(id);
+      });
+    });
+  }
 }
