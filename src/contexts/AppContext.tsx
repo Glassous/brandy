@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { useToast } from '../components/shared/Toast';
 import { API_BASE, getWsUrl } from '../config';
+import { LocalChatDB } from '../utils/indexedDB';
 
 export interface User {
   id: string;
@@ -72,6 +73,8 @@ interface AppCtx {
   hideChat: (friendId: string) => void;
   updateRemark: (friendId: string, remarkName: string) => void;
   togglePinChat: (friendId: string) => void;
+  deleteLocalChatHistory: (friendId: string) => Promise<void>;
+  deleteAllLocalChatHistories: () => Promise<void>;
 }
 
 const AppContext = createContext<AppCtx | null>(null);
@@ -89,6 +92,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [activeChatFriendId, setActiveChatFriendId] = useState<string | null>(null);
   const [chats, setChats] = useState<ChatSession[]>([]);
+
+  const activeChatFriendIdRef = useRef<string | null>(null);
+  const userRef = useRef<User | null>(null);
+
+  useEffect(() => {
+    activeChatFriendIdRef.current = activeChatFriendId;
+  }, [activeChatFriendId]);
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -123,6 +137,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number | null>(null);
+  const localDbRef = useRef<LocalChatDB | null>(null);
+
+  // Manage IndexedDB connection based on logged-in user
+  useEffect(() => {
+    if (user) {
+      const db = new LocalChatDB(user.id);
+      db.open()
+        .then(() => {
+          localDbRef.current = db;
+        })
+        .catch((err) => {
+          console.error("Failed to open IndexedDB", err);
+        });
+      return () => {
+        db.close();
+        localDbRef.current = null;
+      };
+    } else {
+      localDbRef.current = null;
+    }
+  }, [user]);
 
   const getHeaders = useMemo(() => ({
     'Content-Type': 'application/json',
@@ -166,14 +201,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loadChatMessages = useCallback(async (friendId: string) => {
     if (!token) return;
+
+    const db = localDbRef.current;
+    let localMsgs: Message[] = [];
+    let deletedBefore: string | null = null;
+    let lastSyncTime: string | null = null;
+
+    if (db) {
+      try {
+        const syncState = await db.getSyncState(friendId);
+        deletedBefore = syncState.deleted_before;
+        lastSyncTime = syncState.last_sync_time;
+        localMsgs = await db.getMessages(friendId, deletedBefore);
+        setMessages(localMsgs);
+        setChats(prev => prev.map(c => c.friend_id === friendId ? { ...c, unread_count: 0 } : c));
+      } catch (err) {
+        console.error("Failed to load local chat history", err);
+      }
+    }
+
     try {
-      const res = await fetch(`${API_BASE}/api/chats/${friendId}/messages`, { headers: getHeaders });
+      const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+      const since = (!lastSyncTime || lastSyncTime < threeDaysAgo) ? threeDaysAgo : lastSyncTime;
+
+      const res = await fetch(`${API_BASE}/api/chats/${friendId}/messages?since=${since}`, { headers: getHeaders });
       if (res.ok) {
-        setMessages(await res.json());
+        const serverMsgs: Message[] = await res.json();
+        if (db && serverMsgs.length > 0) {
+          const messagesToSave = serverMsgs.map(m => ({ ...m, friend_id: friendId }));
+          await db.saveMessages(messagesToSave);
+          
+          const maxTime = serverMsgs.reduce((max, m) => m.created_at > max ? m.created_at : max, since);
+          await db.updateSyncState({
+            friend_id: friendId,
+            last_sync_time: maxTime,
+            deleted_before: deletedBefore
+          });
+        }
+
+        if (db) {
+          const updatedMsgs = await db.getMessages(friendId, deletedBefore);
+          setMessages(updatedMsgs);
+        } else {
+          setMessages(serverMsgs);
+        }
+
         setChats(prev => prev.map(c => c.friend_id === friendId ? { ...c, unread_count: 0 } : c));
         fetchChats();
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.warn("Failed to fetch incremental history, offline mode", err);
+    }
   }, [token, getHeaders, fetchChats]);
 
   const addFriend = useCallback(async (targetUsername: string): Promise<boolean> => {
@@ -339,6 +417,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [token, user, fetchChats, fetchFriends, showToast]);
 
   const startChat = useCallback((friendId: string, friendName: string) => {
+    if (user) {
+      setHiddenChats(prev => {
+        if (prev.includes(friendId)) {
+          const next = prev.filter(id => id !== friendId);
+          localStorage.setItem(`brandy_hidden_chats_${user.id}`, JSON.stringify(next));
+          return next;
+        }
+        return prev;
+      });
+    }
     setChats(prev => {
       if (prev.some(c => c.friend_id === friendId)) return prev;
       return [{
@@ -350,7 +438,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }, ...prev];
     });
     setActiveChatFriendId(friendId);
-  }, []);
+  }, [user]);
 
   const sendMessage = useCallback((receiverId: string, content: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -387,6 +475,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showToast('已登出', 'info');
   }, [showToast]);
 
+  const deleteLocalChatHistory = useCallback(async (friendId: string) => {
+    const db = localDbRef.current;
+    if (!db) return;
+    try {
+      const session = chats.find(c => c.friend_id === friendId);
+      const nowStr = session?.last_msg_time || new Date().toISOString();
+      await db.clearMessages(friendId);
+      const current = await db.getSyncState(friendId);
+      await db.updateSyncState({
+        ...current,
+        deleted_before: nowStr
+      });
+      if (activeChatFriendId === friendId) {
+        setMessages([]);
+      }
+      hideChat(friendId);
+      showToast("本地聊天记录已清除", "success");
+      fetchChats();
+    } catch (err) {
+      console.error(err);
+      showToast("清除聊天记录失败", "error");
+    }
+  }, [activeChatFriendId, chats, hideChat, fetchChats, showToast]);
+
+  const deleteAllLocalChatHistories = useCallback(async () => {
+    const db = localDbRef.current;
+    if (!db || !user) return;
+    try {
+      const bufferTime = new Date(Date.now() - 5000).toISOString();
+      await db.clearAllMessages();
+      await db.updateAllSyncStates(bufferTime);
+      setMessages([]);
+      
+      const allFriendIds = chats.map(c => c.friend_id);
+      setHiddenChats(allFriendIds);
+      localStorage.setItem(`brandy_hidden_chats_${user.id}`, JSON.stringify(allFriendIds));
+
+      showToast("所有本地聊天记录已清除", "success");
+      fetchChats();
+    } catch (err) {
+      console.error(err);
+      showToast("清除所有聊天记录失败", "error");
+    }
+  }, [user, chats, fetchChats, showToast]);
+
   // WebSocket connection
   useEffect(() => {
     if (!token) return;
@@ -401,21 +534,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const msg = JSON.parse(e.data);
           if (msg.event === 'message') {
             const m: Message = msg.data;
+            const currentUser = userRef.current;
+            const currentActiveFriendId = activeChatFriendIdRef.current;
 
-            // Auto show hidden chat on new message
-            if (user) {
-              const partnerId = m.sender_id === user.id ? m.receiver_id : m.sender_id;
+            if (currentUser) {
+              const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
+              
+              // Save received message to IndexedDB and update sync_states
+              const db = localDbRef.current;
+              if (db) {
+                db.saveMessages([{ ...m, friend_id: partnerId }]).then(async () => {
+                  const state = await db.getSyncState(partnerId);
+                  await db.updateSyncState({
+                    ...state,
+                    last_sync_time: m.created_at
+                  });
+                }).catch(err => {
+                  console.error("Failed to save real-time message to IndexedDB", err);
+                });
+              }
+
+              // Auto show hidden chat on new message
               setHiddenChats(prev => {
                 if (prev.includes(partnerId)) {
                   const next = prev.filter(id => id !== partnerId);
-                  localStorage.setItem(`brandy_hidden_chats_${user.id}`, JSON.stringify(next));
+                  localStorage.setItem(`brandy_hidden_chats_${currentUser.id}`, JSON.stringify(next));
                   return next;
                 }
                 return prev;
               });
-            }
 
-            setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]);
+              // Only append to active chat room messages to avoid cross-chat bleeding
+              if (partnerId === currentActiveFriendId) {
+                setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]);
+              }
+            }
             fetchChats();
           }
         } catch { /* ignore */ }
@@ -466,6 +619,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fetchChats, fetchFriends, fetchFriendRequests,
       hiddenChats, remarks, pinnedChats, hideChat, updateRemark, togglePinChat,
       uploadAvatar,
+      deleteLocalChatHistory,
+      deleteAllLocalChatHistories,
     }}>
       {children}
     </AppContext.Provider>

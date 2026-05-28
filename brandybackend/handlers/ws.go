@@ -425,6 +425,19 @@ func GetChatMessages(c *gin.Context) {
 		},
 	}
 
+	sinceStr := c.Query("since")
+	if sinceStr != "" {
+		sinceTime, err := time.Parse(time.RFC3339, sinceStr)
+		if err != nil {
+			sinceTime, err = time.Parse(time.RFC3339Nano, sinceStr)
+		}
+		if err == nil {
+			filter["created_at"] = bson.M{"$gt": sinceTime}
+		} else {
+			log.Printf("Failed to parse since parameter '%s': %v", sinceStr, err)
+		}
+	}
+
 	cursor, err := db.MongoDB.Collection("messages").Find(ctx, filter, opts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chat history"})

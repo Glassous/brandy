@@ -5,7 +5,7 @@ import { Avatar } from '../components/shared/Avatar';
 import { useToast } from '../components/shared/Toast';
 
 export function ContactsPage() {
-  const { friends, friendRequests, handleFriendRequest, startChat, remarks, updateRemark, deleteFriend } = useApp();
+  const { friends, friendRequests, handleFriendRequest, startChat, remarks, updateRemark, deleteFriend, deleteLocalChatHistory } = useApp();
   const navigate = useNavigate();
   const { showToast } = useToast();
 
@@ -430,6 +430,17 @@ export function ContactsPage() {
                   style={{ width: '100%', borderRadius: 24, padding: '12px 24px' }}
                 >
                   设置备注
+                </button>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={async () => {
+                    if (confirm("确定要清除与该好友在当前浏览器上的聊天记录吗？此操作不可恢复。")) {
+                      await deleteLocalChatHistory(selectedFriend.id);
+                    }
+                  }}
+                  style={{ width: '100%', borderRadius: 24, padding: '12px 24px', background: 'var(--hover)', color: 'var(--badge-unread)' }}
+                >
+                  清除本地聊天记录
                 </button>
                 <button 
                   className="btn btn-danger" 

@@ -18,7 +18,7 @@ const EyeOffIcon = () => (
 );
 
 export function AccountSettingsPage() {
-  const { user, token, updateNickname, logout, uploadAvatar } = useApp();
+  const { user, token, updateNickname, logout, uploadAvatar, deleteAllLocalChatHistories } = useApp();
   const [nick, setNick] = useState(user?.nickname || '');
   const [saving, setSaving] = useState(false);
 
@@ -191,7 +191,18 @@ export function AccountSettingsPage() {
             </button>
           </form>
         </div>
-        <div className="pf-logout">
+        <div className="pf-logout" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <button 
+            className="btn btn-secondary btn-round" 
+            onClick={async () => {
+              if (confirm("确定要清除当前浏览器上的所有本地聊天记录吗？这不会影响其他设备，但此操作不可撤销。")) {
+                await deleteAllLocalChatHistories();
+              }
+            }} 
+            style={{ width: '100%', border: '1px solid var(--border)', background: 'var(--bg-paper)', color: 'var(--badge-unread)' }}
+          >
+            清除本地所有聊天记录
+          </button>
           <button className="btn btn-danger btn-round" onClick={logout} style={{ width: '100%' }}>退出登录</button>
         </div>
       </div>
