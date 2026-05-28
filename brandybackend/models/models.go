@@ -14,6 +14,7 @@ type User struct {
 	Avatar             string             `bson:"avatar" json:"avatar"`
 	Email              string             `bson:"email" json:"email"`
 	CustomTransferPath string             `bson:"custom_transfer_path" json:"custom_transfer_path"`
+	IsAI               bool               `bson:"is_ai,omitempty" json:"is_ai,omitempty"`
 	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
 }
 
@@ -59,16 +60,18 @@ type UserResponse struct {
 	Nickname           string    `json:"nickname"`
 	Avatar             string    `json:"avatar"`
 	CustomTransferPath string    `json:"custom_transfer_path"`
+	IsAI               bool      `json:"is_ai,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 
 type GroupResponse struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	OwnerID   string         `json:"owner_id"`
-	Admins    []string       `json:"admins"`
-	Members   []UserResponse `json:"members"`
-	CreatedAt time.Time      `json:"created_at"`
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	OwnerID   string             `json:"owner_id"`
+	Admins    []string           `json:"admins"`
+	Members   []UserResponse     `json:"members"`
+	AIMembers []AIMemberResponse `json:"ai_members,omitempty"`
+	CreatedAt time.Time          `json:"created_at"`
 }
 
 type ChatSession struct {
@@ -107,5 +110,24 @@ type DiskItem struct {
 	URL          string              `bson:"url,omitempty" json:"url"`
 	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`
+}
+
+type AIMember struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	GroupID     primitive.ObjectID `bson:"group_id" json:"group_id"`
+	Name        string             `bson:"name" json:"name"`
+	Personality string             `bson:"personality" json:"personality"`
+	Avatar      string             `bson:"avatar" json:"avatar"`
+	UserID      primitive.ObjectID `bson:"user_id" json:"user_id"`
+	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
+}
+
+type AIMemberResponse struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Personality string    `json:"personality"`
+	Avatar      string    `json:"avatar"`
+	UserID      string    `json:"user_id"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 

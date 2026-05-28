@@ -611,7 +611,10 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     addGroupMembers,
     removeGroupMember,
     addGroupAdmin,
-    removeGroupAdmin
+    removeGroupAdmin,
+    addAIMember,
+    getAIMembers,
+    removeAIMember
   } = useApp();
   const { showToast } = useToast();
 
@@ -635,6 +638,17 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const [messagesToForward, setMessagesToForward] = useState<string[]>([]);
   const [forwardTargets, setForwardTargets] = useState<{ id: string, name: string, isGroup: boolean }[]>([]);
 
+  // AI Members State
+  const [aiMembers, setAIMembers] = useState<any[]>([]);
+  const [showAddAIModal, setShowAddAIModal] = useState(false);
+  const [aiName, setAIName] = useState('');
+  const [aiPersonality, setAIPersonality] = useState('');
+
+  // Mention List State
+  const [showMentionList, setShowMentionList] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const mentionListRef = useRef<HTMLDivElement>(null);
+
   // Load chat and fetch group info
   useEffect(() => {
     onLoad(chatId, isGroup);
@@ -642,14 +656,18 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       const getDetail = async () => {
         const detail = await fetchGroupDetail(chatId);
         setGroupDetail(detail);
+        // Load AI members
+        const aiMembersList = await getAIMembers(chatId);
+        setAIMembers(aiMembersList || []);
       };
       getDetail();
       setShowGroupSettings(false);
     } else {
       setGroupDetail(null);
       setShowGroupSettings(false);
+      setAIMembers([]);
     }
-  }, [chatId, isGroup, onLoad, fetchGroupDetail]);
+  }, [chatId, isGroup, onLoad, fetchGroupDetail, getAIMembers]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -657,7 +675,61 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     if (isGroup) {
       const detail = await fetchGroupDetail(chatId);
       setGroupDetail(detail);
+      // Also refresh AI members
+      const aiMembersList = await getAIMembers(chatId);
+      setAIMembers(aiMembersList || []);
     }
+  };
+
+  // AI Member Management
+  const handleAddAI = async () => {
+    if (!aiName.trim()) {
+      showToast('请输入AI名字', 'error');
+      return;
+    }
+    const success = await addAIMember(chatId, aiName.trim(), aiPersonality.trim());
+    if (success) {
+      setShowAddAIModal(false);
+      setAIName('');
+      setAIPersonality('');
+      refreshGroupDetail();
+    }
+  };
+
+  const handleRemoveAI = async (aiId: string) => {
+    if (!confirm('确定要移除该AI成员吗？')) return;
+    const success = await removeAIMember(chatId, aiId);
+    if (success) {
+      refreshGroupDetail();
+    }
+  };
+
+  // Get mention list (group members + AI members, excluding current user)
+  const getMentionList = () => {
+    const members: { id: string; name: string; avatar?: string; isAI: boolean }[] = [];
+    
+    // Add regular members (excluding current user)
+    if (groupDetail?.members) {
+      groupDetail.members.forEach((m: any) => {
+        if (m.id !== currentUserId && !m.is_ai) {
+          members.push({ id: m.id, name: m.nickname, avatar: m.avatar, isAI: false });
+        }
+      });
+    }
+    
+    // Add AI members
+    aiMembers.forEach(ai => {
+      members.push({ id: ai.id, name: ai.name, avatar: ai.avatar, isAI: true });
+    });
+    
+    // Filter by query
+    if (mentionQuery) {
+      return members.filter(m => 
+        m.name.toLowerCase().includes(mentionQuery.toLowerCase())
+      );
+    }
+    
+    return members;
   };
 
   // Close context menu on click elsewhere
@@ -1447,11 +1519,21 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               // Resolve sender nickname & avatar for group chats
               let senderNickname = '';
               let senderAvatar = undefined;
+              let senderIsAI = false;
               if (isGroup && groupDetail && groupDetail.members) {
                 const member = groupDetail.members.find((mb: any) => mb.id === m.sender_id);
                 if (member) {
                   senderNickname = member.nickname;
                   senderAvatar = member.avatar;
+                }
+              }
+              // Check AI members if not found in regular members
+              if (!senderNickname && isGroup && aiMembers.length > 0) {
+                const aiMember = aiMembers.find((ai: any) => ai.user_id === m.sender_id);
+                if (aiMember) {
+                  senderNickname = aiMember.name;
+                  senderAvatar = aiMember.avatar;
+                  senderIsAI = true;
                 }
               }
    
@@ -1485,8 +1567,20 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                     )}
                     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, maxWidth: '70%', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
                       {isGroup && !isOwn && isFirstOfGroup && senderNickname && (
-                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 2, marginLeft: 4 }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 2, marginLeft: 4, display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {senderNickname}
+                          {senderIsAI && (
+                            <span style={{
+                              fontSize: '9px',
+                              background: 'var(--brand-blue)',
+                              color: '#fff',
+                              padding: '1px 4px',
+                              borderRadius: '3px',
+                              fontWeight: 700
+                            }}>
+                              AI
+                            </span>
+                          )}
                         </span>
                       )}
                         {(() => {
@@ -1565,31 +1659,136 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSend} className="cr-input-bar">
-            <button type="button" className="btn btn-secondary" style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} title="发送文件/媒体">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              onChange={handleFileChange}
-            />
-            <input
-              type="text"
-              placeholder="输入消息..."
-              value={text}
-              onChange={e => setText(e.target.value)}
-            />
-            <button type="submit" className="btn cr-send" disabled={!text.trim()}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
-          </form>
+          <div style={{ position: 'relative' }}>
+            {/* Mention List */}
+            {showMentionList && isGroup && (
+              <div
+                ref={mentionListRef}
+                className="cr-mention-list"
+                onMouseDown={e => e.preventDefault()}
+                style={{
+                  position: 'absolute',
+                  bottom: '100%',
+                  left: 0,
+                  right: 0,
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  boxShadow: '0 -4px 12px rgba(0,0,0,0.1)',
+                  zIndex: 100,
+                  marginBottom: '4px'
+                }}
+              >
+                {getMentionList().length === 0 ? (
+                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>
+                    无匹配成员
+                  </div>
+                ) : (
+                  getMentionList().map(member => (
+                    <div
+                      key={member.id}
+                      className="cr-mention-item"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        const lastAtIndex = text.lastIndexOf('@');
+                        if (lastAtIndex !== -1) {
+                          setText(text.substring(0, lastAtIndex) + '@' + member.name + ' ');
+                        }
+                        setShowMentionList(false);
+                        setMentionQuery('');
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      {member.isAI ? (
+                        <span style={{ fontSize: '20px' }}>🤖</span>
+                      ) : (
+                        <Avatar name={member.name} url={member.avatar} size={28} />
+                      )}
+                      <span style={{ fontSize: '13px', fontWeight: 500 }}>{member.name}</span>
+                      {member.isAI && (
+                        <span style={{
+                          fontSize: '10px',
+                          background: 'var(--brand-blue)',
+                          color: '#fff',
+                          padding: '1px 4px',
+                          borderRadius: '4px',
+                          marginLeft: 'auto'
+                        }}>
+                          AI
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+            
+            <form onSubmit={handleSend} className="cr-input-bar">
+              <button type="button" className="btn btn-secondary" style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} title="发送文件/媒体">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                onChange={handleFileChange}
+              />
+              <input
+                type="text"
+                placeholder="输入消息... (输入@提及成员)"
+                value={text}
+                onChange={e => {
+                  setText(e.target.value);
+                  // Detect @ mention
+                  const cursorPos = e.target.selectionStart || 0;
+                  const textBeforeCursor = e.target.value.substring(0, cursorPos);
+                  const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+                  if (lastAtIndex !== -1 && (lastAtIndex === 0 || textBeforeCursor[lastAtIndex - 1] === ' ')) {
+                    const query = textBeforeCursor.substring(lastAtIndex + 1);
+                    if (!query.includes(' ')) {
+                      setMentionQuery(query);
+                      setShowMentionList(true);
+                      return;
+                    }
+                  }
+                  setShowMentionList(false);
+                  setMentionQuery('');
+                }}
+                onFocus={() => {
+                  // Re-show mention list if @ is present
+                  const cursorPos = text.length;
+                  const textBeforeCursor = text.substring(0, cursorPos);
+                  const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+                  if (lastAtIndex !== -1 && (lastAtIndex === 0 || textBeforeCursor[lastAtIndex - 1] === ' ')) {
+                    const query = textBeforeCursor.substring(lastAtIndex + 1);
+                    if (!query.includes(' ')) {
+                      setMentionQuery(query);
+                      setShowMentionList(true);
+                    }
+                  }
+                }}
+              />
+              <button type="submit" className="btn cr-send" disabled={!text.trim()}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </button>
+            </form>
+          </div>
         )}
       </div>
 
@@ -1611,7 +1810,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
           <div className="cr-settings-section">
             <div className="cr-settings-title">
-              <span>群成员 ({groupDetail.members?.length || 0})</span>
+              <span>群成员 ({groupDetail.members?.filter((m: any) => !m.is_ai).length || 0})</span>
               <button
                 className="member-action-btn"
                 title="邀请好友"
@@ -1625,7 +1824,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               </button>
             </div>
             <div className="cr-settings-member-list">
-              {groupDetail.members?.map((member: any) => {
+              {groupDetail.members?.filter((member: any) => !member.is_ai).map((member: any) => {
                 const isOwner = member.id === groupDetail.owner_id;
                 const isAdmin = groupDetail.admins?.includes(member.id);
                 const isMe = member.id === currentUserId;
@@ -1665,6 +1864,56 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* AI Members Section */}
+          <div className="cr-settings-section">
+            <div className="cr-settings-title">
+              <span>AI成员 ({aiMembers.length || 0})</span>
+              <button
+                className="member-action-btn"
+                title="添加AI成员"
+                onClick={() => {
+                  setAIName('');
+                  setAIPersonality('');
+                  setShowAddAIModal(true);
+                }}
+                style={{ color: 'var(--brand-blue)', fontSize: 14 }}
+              >
+                ➕
+              </button>
+            </div>
+            <div className="cr-settings-member-list">
+              {aiMembers.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-dim)', fontSize: '12px' }}>
+                  暂无AI成员
+                </div>
+              ) : (
+                aiMembers.map(ai => (
+                  <div key={ai.id} className="cr-settings-member-item">
+                    <div className="member-info">
+                      <span style={{ fontSize: '20px' }}>🤖</span>
+                      <span className="member-name">{ai.name}</span>
+                      {ai.personality && (
+                        <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginLeft: '4px' }}>
+                          ({ai.personality})
+                        </span>
+                      )}
+                    </div>
+                    <div className="cr-settings-member-actions">
+                      <button
+                        className="member-action-btn danger"
+                        title="移除AI"
+                        onClick={() => handleRemoveAI(ai.id)}
+                        style={{ fontSize: 11 }}
+                      >
+                        ❌
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -1816,6 +2065,52 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           <button className="cr-context-menu-item danger" onClick={() => handleDeleteSingle(contextMenu.messageId)}>
             删除
           </button>
+        </div>
+      )}
+
+      {/* Add AI Member Modal */}
+      {showAddAIModal && (
+        <div className="modal-overlay" onClick={() => setShowAddAIModal(false)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">添加AI成员</span>
+              <button className="modal-close-btn" onClick={() => setShowAddAIModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>
+                  AI名字 <span style={{ color: 'var(--badge-unread)' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="输入AI名字（群内唯一）"
+                  value={aiName}
+                  onChange={e => setAIName(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>
+                  性格描述（可选）
+                </label>
+                <input
+                  type="text"
+                  placeholder="例如：活泼开朗、幽默风趣、温柔体贴"
+                  value={aiPersonality}
+                  onChange={e => setAIPersonality(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowAddAIModal(false)}>
+                取消
+              </button>
+              <button type="button" className="btn btn-primary" onClick={handleAddAI} disabled={!aiName.trim()}>
+                确定
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

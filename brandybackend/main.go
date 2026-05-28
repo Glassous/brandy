@@ -92,6 +92,10 @@ func main() {
 		api.POST("/groups/:group_id/admins", handlers.AddGroupAdmin)
 		api.DELETE("/groups/:group_id/admins/:user_id", handlers.RemoveGroupAdmin)
 		api.GET("/groups/:group_id/messages", handlers.GetGroupMessages)
+		api.POST("/groups/:group_id/ai-members", handlers.AddAIMember)
+		api.GET("/groups/:group_id/ai-members", handlers.GetAIMembers)
+		api.PUT("/groups/:group_id/ai-members/:ai_id", handlers.UpdateAIMember)
+		api.DELETE("/groups/:group_id/ai-members/:ai_id", handlers.RemoveAIMember)
 
 		// Cloud Disk Routes
 		api.GET("/disk/items", handlers.GetDiskItems)

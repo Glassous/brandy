@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"brandybackend/db"
 	"brandybackend/middleware"
 	"brandybackend/models"
+	"brandybackend/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -320,6 +322,139 @@ func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
 	// Broadcast to all group members via Redis pub/sub
 	for _, memberID := range group.Members {
 		db.RedisClient.Publish(context.Background(), "user_messages:"+memberID.Hex(), wsMsgBytes)
+	}
+
+	// Check if message mentions an AI member
+	if aiName := extractAIMention(content); aiName != "" {
+		go triggerAIResponse(groupIDStr, aiName, senderIDStr, content)
+	}
+}
+
+func extractAIMention(content string) string {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "@") {
+		return ""
+	}
+
+	parts := strings.SplitN(content, " ", 2)
+	if len(parts) == 0 {
+		return ""
+	}
+
+	aiName := strings.TrimPrefix(parts[0], "@")
+	if aiName == "" {
+		return ""
+	}
+
+	return aiName
+}
+
+func triggerAIResponse(groupIDStr, aiName, senderIDStr, originalMsg string) {
+	log.Printf("[AI] Triggering AI response for group=%s, aiName=%s, sender=%s", groupIDStr, aiName, senderIDStr)
+
+	groupID, _ := primitive.ObjectIDFromHex(groupIDStr)
+	senderID, _ := primitive.ObjectIDFromHex(senderIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Find AI member
+	var aiMember models.AIMember
+	err := db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{
+		"group_id": groupID,
+		"name":     aiName,
+	}).Decode(&aiMember)
+	if err != nil {
+		log.Printf("[AI] AI member '%s' not found in group %s: %v", aiName, groupIDStr, err)
+		return
+	}
+	log.Printf("[AI] Found AI member: %s (UserID: %s)", aiMember.Name, aiMember.UserID.Hex())
+
+	// Get sender name
+	var sender models.User
+	err = db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": senderID}).Decode(&sender)
+	if err != nil {
+		log.Printf("[AI] Failed to get sender info: %v", err)
+		return
+	}
+
+	// Get recent 30 messages for context
+	recentMessages := utils.GetRecentGroupMessages(ctx, groupID, 30)
+	log.Printf("[AI] Got %d recent messages for context", len(recentMessages))
+
+	// Build OpenAI messages
+	chatMessages := utils.BuildChatMessages(
+		aiMember.Name,
+		aiMember.Personality,
+		recentMessages,
+		sender.Nickname,
+		originalMsg,
+		aiMember.UserID,
+	)
+	log.Printf("[AI] Built %d chat messages for OpenAI", len(chatMessages))
+
+	// Call OpenAI
+	response, err := utils.CallOpenAI(ctx, chatMessages)
+	if err != nil {
+		log.Printf("[AI] Failed to call OpenAI: %v", err)
+		// Send error message as AI response so user can see the error
+		errMsg := fmt.Sprintf("抱歉，我暂时无法回复：%v", err)
+		saveAndBroadcastAIResponse(ctx, groupID, groupIDStr, aiMember, errMsg)
+		return
+	}
+
+	if response == "" {
+		log.Printf("[AI] Empty response from OpenAI")
+		saveAndBroadcastAIResponse(ctx, groupID, groupIDStr, aiMember, "抱歉，我暂时无法回复（空响应）")
+		return
+	}
+
+	log.Printf("[AI] Got response from OpenAI: %s", response[:min(100, len(response))])
+	saveAndBroadcastAIResponse(ctx, groupID, groupIDStr, aiMember, response)
+}
+
+func saveAndBroadcastAIResponse(ctx context.Context, groupID primitive.ObjectID, groupIDStr string, aiMember models.AIMember, response string) {
+	// Save AI response to messages
+	aiMsg := models.Message{
+		ID:        primitive.NewObjectID(),
+		SenderID:  aiMember.UserID,
+		GroupID:   groupID,
+		Content:   response,
+		IsRead:    false,
+		CreatedAt: time.Now(),
+	}
+
+	_, err := db.MongoDB.Collection("messages").InsertOne(ctx, aiMsg)
+	if err != nil {
+		log.Printf("[AI] Failed to insert AI message: %v", err)
+		return
+	}
+	log.Printf("[AI] Saved AI message with ID: %s", aiMsg.ID.Hex())
+
+	// Broadcast AI response
+	eventData := MessageEventData{
+		ID:        aiMsg.ID.Hex(),
+		SenderID:  aiMember.UserID.Hex(),
+		GroupID:   groupIDStr,
+		Content:   response,
+		CreatedAt: aiMsg.CreatedAt,
+	}
+
+	wsMsg := WSMessage{
+		Event: "message",
+		Data:  eventData,
+	}
+
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+
+	// Get group members for broadcast
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err == nil {
+		for _, memberID := range group.Members {
+			db.RedisClient.Publish(context.Background(), "user_messages:"+memberID.Hex(), wsMsgBytes)
+		}
+		log.Printf("[AI] Broadcasted AI response to %d group members", len(group.Members))
 	}
 }
 

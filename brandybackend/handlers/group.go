@@ -196,11 +196,16 @@ func GetGroupDetail(c *gin.Context) {
 		var dbUsers []models.User
 		if cursor.All(ctx, &dbUsers) == nil {
 			for _, u := range dbUsers {
+				// Skip AI users - they are shown separately in ai_members
+				if u.IsAI {
+					continue
+				}
 				members = append(members, models.UserResponse{
 					ID:        u.ID.Hex(),
 					Username:  u.Username,
 					Nickname:  u.Nickname,
 					Avatar:    u.Avatar,
+					IsAI:      u.IsAI,
 					CreatedAt: u.CreatedAt,
 				})
 			}
@@ -213,12 +218,33 @@ func GetGroupDetail(c *gin.Context) {
 		admins = append(admins, a.Hex())
 	}
 
+	// Get AI members for this group
+	var aiMembers []models.AIMemberResponse
+	aiCursor, err := db.MongoDB.Collection("ai_members").Find(ctx, bson.M{"group_id": groupID})
+	if err == nil {
+		var aiMemberList []models.AIMember
+		if aiCursor.All(ctx, &aiMemberList) == nil {
+			for _, ai := range aiMemberList {
+				aiMembers = append(aiMembers, models.AIMemberResponse{
+					ID:          ai.ID.Hex(),
+					Name:        ai.Name,
+					Personality: ai.Personality,
+					Avatar:      ai.Avatar,
+					UserID:      ai.UserID.Hex(),
+					CreatedAt:   ai.CreatedAt,
+				})
+			}
+		}
+		aiCursor.Close(ctx)
+	}
+
 	c.JSON(http.StatusOK, models.GroupResponse{
 		ID:        group.ID.Hex(),
 		Name:      group.Name,
 		OwnerID:   group.OwnerID.Hex(),
 		Admins:    admins,
 		Members:   members,
+		AIMembers: aiMembers,
 		CreatedAt: group.CreatedAt,
 	})
 }
@@ -644,4 +670,301 @@ func GetGroupMessages(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// AI Member Management
+
+type AddAIMemberReq struct {
+	Name        string `json:"name" binding:"required"`
+	Personality string `json:"personality"`
+	Avatar      string `json:"avatar"`
+}
+
+func AddAIMember(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req AddAIMemberReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if group exists and current user is member
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found or you are not a member"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Check if AI member name already exists in this group
+	var existingAI models.AIMember
+	err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{
+		"group_id": groupID,
+		"name":     strings.TrimSpace(req.Name),
+	}).Decode(&existingAI)
+	if err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "AI member with this name already exists in the group"})
+		return
+	}
+
+	// Create virtual user for AI
+	aiUser := models.User{
+		ID:        primitive.NewObjectID(),
+		Username:  "ai_" + primitive.NewObjectID().Hex(),
+		Nickname:  strings.TrimSpace(req.Name),
+		Avatar:    req.Avatar,
+		IsAI:      true,
+		CreatedAt: time.Now(),
+	}
+
+	_, err = db.MongoDB.Collection("users").InsertOne(ctx, aiUser)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create AI user"})
+		return
+	}
+
+	// Create AI member record
+	aiMember := models.AIMember{
+		ID:          primitive.NewObjectID(),
+		GroupID:     groupID,
+		Name:        strings.TrimSpace(req.Name),
+		Personality: strings.TrimSpace(req.Personality),
+		Avatar:      req.Avatar,
+		UserID:      aiUser.ID,
+		CreatedAt:   time.Now(),
+	}
+
+	_, err = db.MongoDB.Collection("ai_members").InsertOne(ctx, aiMember)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create AI member"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, models.AIMemberResponse{
+		ID:          aiMember.ID.Hex(),
+		Name:        aiMember.Name,
+		Personality: aiMember.Personality,
+		Avatar:      aiMember.Avatar,
+		UserID:      aiUser.ID.Hex(),
+		CreatedAt:   aiMember.CreatedAt,
+	})
+}
+
+func GetAIMembers(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if group exists and current user is member
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found or you are not a member"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Get AI members
+	cursor, err := db.MongoDB.Collection("ai_members").Find(ctx, bson.M{"group_id": groupID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch AI members"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var aiMembers []models.AIMember
+	if err = cursor.All(ctx, &aiMembers); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode AI members"})
+		return
+	}
+
+	response := make([]models.AIMemberResponse, 0)
+	for _, ai := range aiMembers {
+		response = append(response, models.AIMemberResponse{
+			ID:          ai.ID.Hex(),
+			Name:        ai.Name,
+			Personality: ai.Personality,
+			Avatar:      ai.Avatar,
+			UserID:      ai.UserID.Hex(),
+			CreatedAt:   ai.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func UpdateAIMember(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	aiIDStr := c.Param("ai_id")
+	aiID, err := primitive.ObjectIDFromHex(aiIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid AI member ID"})
+		return
+	}
+
+	var req AddAIMemberReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if group exists and current user is member
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found or you are not a member"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Check if AI member exists
+	var aiMember models.AIMember
+	err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{"_id": aiID, "group_id": groupID}).Decode(&aiMember)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI member not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Check name uniqueness if name changed
+	if strings.TrimSpace(req.Name) != aiMember.Name {
+		var existingAI models.AIMember
+		err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{
+			"group_id": groupID,
+			"name":     strings.TrimSpace(req.Name),
+			"_id":      bson.M{"$ne": aiID},
+		}).Decode(&existingAI)
+		if err == nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "AI member with this name already exists in the group"})
+			return
+		}
+	}
+
+	// Update AI member
+	update := bson.M{
+		"$set": bson.M{
+			"name":        strings.TrimSpace(req.Name),
+			"personality": strings.TrimSpace(req.Personality),
+			"avatar":      req.Avatar,
+		},
+	}
+
+	_, err = db.MongoDB.Collection("ai_members").UpdateOne(ctx, bson.M{"_id": aiID}, update)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update AI member"})
+		return
+	}
+
+	// Update virtual user nickname
+	_, err = db.MongoDB.Collection("users").UpdateOne(
+		ctx,
+		bson.M{"_id": aiMember.UserID},
+		bson.M{"$set": bson.M{"nickname": strings.TrimSpace(req.Name), "avatar": req.Avatar}},
+	)
+	if err != nil {
+		log.Printf("Failed to update AI user: %v", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "AI member updated successfully"})
+}
+
+func RemoveAIMember(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	aiIDStr := c.Param("ai_id")
+	aiID, err := primitive.ObjectIDFromHex(aiIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid AI member ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if group exists and current user is member
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found or you are not a member"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Check if AI member exists
+	var aiMember models.AIMember
+	err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{"_id": aiID, "group_id": groupID}).Decode(&aiMember)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI member not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Delete AI member record
+	_, err = db.MongoDB.Collection("ai_members").DeleteOne(ctx, bson.M{"_id": aiID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete AI member"})
+		return
+	}
+
+	// Delete AI user
+	_, err = db.MongoDB.Collection("users").DeleteOne(ctx, bson.M{"_id": aiMember.UserID})
+	if err != nil {
+		log.Printf("Failed to delete AI user: %v", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "AI member removed successfully"})
 }

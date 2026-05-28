@@ -91,6 +91,9 @@ interface AppCtx {
   removeGroupMember: (groupId: string, userId: string) => Promise<boolean>;
   addGroupAdmin: (groupId: string, userId: string) => Promise<boolean>;
   removeGroupAdmin: (groupId: string, userId: string) => Promise<boolean>;
+  addAIMember: (groupId: string, name: string, personality: string) => Promise<boolean>;
+  getAIMembers: (groupId: string) => Promise<any[]>;
+  removeAIMember: (groupId: string, aiId: string) => Promise<boolean>;
 }
 
 const AppContext = createContext<AppCtx | null>(null);
@@ -652,6 +655,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [token, getHeaders, showToast]);
 
+  const addAIMember = useCallback(async (groupId: string, name: string, personality: string) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/ai-members`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ name, personality }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('AI成员添加成功', 'success');
+        return true;
+      } else {
+        showToast(data.error || '添加AI成员失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const getAIMembers = useCallback(async (groupId: string) => {
+    if (!token) return [];
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/ai-members`, { headers: getHeaders });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch { /* ignore */ }
+    return [];
+  }, [token, getHeaders]);
+
+  const removeAIMember = useCallback(async (groupId: string, aiId: string) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/ai-members/${aiId}`, {
+        method: 'DELETE',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('AI成员已移除', 'success');
+        return true;
+      } else {
+        showToast(data.error || '移除AI成员失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
   const login = useCallback((newToken: string, loggedUser: User) => {
     setToken(newToken);
     setUser(loggedUser);
@@ -865,6 +922,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       removeGroupMember,
       addGroupAdmin,
       removeGroupAdmin,
+      addAIMember,
+      getAIMembers,
+      removeAIMember,
     }}>
       {children}
     </AppContext.Provider>
