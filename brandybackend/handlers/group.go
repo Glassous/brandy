@@ -1,0 +1,647 @@
+package handlers
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"brandybackend/db"
+	"brandybackend/models"
+
+	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+type CreateGroupReq struct {
+	Name    string   `json:"name"`
+	Members []string `json:"members" binding:"required"`
+}
+
+type UpdateGroupReq struct {
+	Name string `json:"name" binding:"required"`
+}
+
+type AddGroupMembersReq struct {
+	Members []string `json:"members" binding:"required"`
+}
+
+type GroupAdminReq struct {
+	UserID string `json:"user_id" binding:"required"`
+}
+
+func CreateGroup(c *gin.Context) {
+	var req CreateGroupReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Parse members
+	memberMap := make(map[primitive.ObjectID]bool)
+	memberMap[currentUserID] = true // Add creator automatically
+
+	for _, mStr := range req.Members {
+		mID, err := primitive.ObjectIDFromHex(mStr)
+		if err == nil {
+			memberMap[mID] = true
+		}
+	}
+
+	memberIDs := make([]primitive.ObjectID, 0, len(memberMap))
+	for mID := range memberMap {
+		memberIDs = append(memberIDs, mID)
+	}
+
+	// Create Group
+	newGroup := models.Group{
+		ID:        primitive.NewObjectID(),
+		Name:      strings.TrimSpace(req.Name),
+		OwnerID:   currentUserID,
+		Admins:    make([]primitive.ObjectID, 0),
+		Members:   memberIDs,
+		CreatedAt: time.Now(),
+	}
+
+	_, err := db.MongoDB.Collection("groups").InsertOne(ctx, newGroup)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create group"})
+		return
+	}
+
+	// Resolve member details for response
+	var members []models.UserResponse
+	cursor, err := db.MongoDB.Collection("users").Find(ctx, bson.M{"_id": bson.M{"$in": memberIDs}})
+	if err == nil {
+		var dbUsers []models.User
+		if cursor.All(ctx, &dbUsers) == nil {
+			for _, u := range dbUsers {
+				members = append(members, models.UserResponse{
+					ID:        u.ID.Hex(),
+					Username:  u.Username,
+					Nickname:  u.Nickname,
+					Avatar:    u.Avatar,
+					CreatedAt: u.CreatedAt,
+				})
+			}
+		}
+		cursor.Close(ctx)
+	}
+
+	c.JSON(http.StatusCreated, models.GroupResponse{
+		ID:        newGroup.ID.Hex(),
+		Name:      newGroup.Name,
+		OwnerID:   newGroup.OwnerID.Hex(),
+		Admins:    make([]string, 0),
+		Members:   members,
+		CreatedAt: newGroup.CreatedAt,
+	})
+}
+
+func GetGroups(c *gin.Context) {
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := db.MongoDB.Collection("groups").Find(ctx, bson.M{"members": currentUserID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query groups"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var groups []models.Group
+	if err = cursor.All(ctx, &groups); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode groups"})
+		return
+	}
+
+	response := make([]models.GroupResponse, 0)
+	for _, g := range groups {
+		var members []models.UserResponse
+		mCursor, err := db.MongoDB.Collection("users").Find(ctx, bson.M{"_id": bson.M{"$in": g.Members}})
+		if err == nil {
+			var dbUsers []models.User
+			if mCursor.All(ctx, &dbUsers) == nil {
+				for _, u := range dbUsers {
+					members = append(members, models.UserResponse{
+						ID:        u.ID.Hex(),
+						Username:  u.Username,
+						Nickname:  u.Nickname,
+						Avatar:    u.Avatar,
+						CreatedAt: u.CreatedAt,
+					})
+				}
+			}
+			mCursor.Close(ctx)
+		}
+
+		admins := make([]string, 0)
+		for _, a := range g.Admins {
+			admins = append(admins, a.Hex())
+		}
+
+		response = append(response, models.GroupResponse{
+			ID:        g.ID.Hex(),
+			Name:      g.Name,
+			OwnerID:   g.OwnerID.Hex(),
+			Admins:    admins,
+			Members:   members,
+			CreatedAt: g.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func GetGroupDetail(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found or you are not a member"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	var members []models.UserResponse
+	cursor, err := db.MongoDB.Collection("users").Find(ctx, bson.M{"_id": bson.M{"$in": group.Members}})
+	if err == nil {
+		var dbUsers []models.User
+		if cursor.All(ctx, &dbUsers) == nil {
+			for _, u := range dbUsers {
+				members = append(members, models.UserResponse{
+					ID:        u.ID.Hex(),
+					Username:  u.Username,
+					Nickname:  u.Nickname,
+					Avatar:    u.Avatar,
+					CreatedAt: u.CreatedAt,
+				})
+			}
+		}
+		cursor.Close(ctx)
+	}
+
+	admins := make([]string, 0)
+	for _, a := range group.Admins {
+		admins = append(admins, a.Hex())
+	}
+
+	c.JSON(http.StatusOK, models.GroupResponse{
+		ID:        group.ID.Hex(),
+		Name:      group.Name,
+		OwnerID:   group.OwnerID.Hex(),
+		Admins:    admins,
+		Members:   members,
+		CreatedAt: group.CreatedAt,
+	})
+}
+
+func UpdateGroup(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req UpdateGroupReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Find group
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Verify permissions: only Owner or Admins can update name
+	isAuthorized := group.OwnerID == currentUserID
+	if !isAuthorized {
+		for _, adminID := range group.Admins {
+			if adminID == currentUserID {
+				isAuthorized = true
+				break
+			}
+		}
+	}
+
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can change group name"})
+		return
+	}
+
+	// Update Group Name
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{"$set": bson.M{"name": strings.TrimSpace(req.Name)}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update group name"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Group name updated successfully"})
+}
+
+func AddGroupMembers(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req AddGroupMembersReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if group exists and current user is member
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found or you are not a member"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Convert new members to ObjectID
+	newMemberIDs := make([]primitive.ObjectID, 0)
+	for _, mStr := range req.Members {
+		mID, err := primitive.ObjectIDFromHex(mStr)
+		if err == nil {
+			newMemberIDs = append(newMemberIDs, mID)
+		}
+	}
+
+	if len(newMemberIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No valid member IDs provided"})
+		return
+	}
+
+	// Add to set of members in MongoDB
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{"$addToSet": bson.M{"members": bson.M{"$each": newMemberIDs}}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add group members"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Members added successfully"})
+}
+
+func RemoveGroupMember(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	targetUserIDStr := c.Param("user_id")
+	targetUserID, err := primitive.ObjectIDFromHex(targetUserIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target user ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Find group
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Check if current user is a member
+	isCurrentMember := false
+	for _, m := range group.Members {
+		if m == currentUserID {
+			isCurrentMember = true
+			break
+		}
+	}
+	if !isCurrentMember {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+		return
+	}
+
+	// Determine authorization
+	isOwner := group.OwnerID == currentUserID
+	isAdmin := false
+	for _, a := range group.Admins {
+		if a == currentUserID {
+			isAdmin = true
+			break
+		}
+	}
+
+	isSelfLeave := currentUserID == targetUserID
+	isAuthorized := isSelfLeave || isOwner || (isAdmin && group.OwnerID != targetUserID)
+
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to remove this member"})
+		return
+	}
+
+	// Cannot kick group owner (unless it's self-leave, but owner leaving is handled specially below)
+	if !isSelfLeave && group.OwnerID == targetUserID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove the group owner"})
+		return
+	}
+
+	// Pull from members and admins
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{
+			"$pull": bson.M{
+				"members": targetUserID,
+				"admins":  targetUserID,
+			},
+		},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member"})
+		return
+	}
+
+	// If group owner left, we need to assign a new owner
+	if isSelfLeave && group.OwnerID == currentUserID {
+		// Fetch updated group members
+		var updatedGroup models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&updatedGroup)
+		if err == nil {
+			if len(updatedGroup.Members) == 0 {
+				// Delete group if empty
+				db.MongoDB.Collection("groups").DeleteOne(ctx, bson.M{"_id": groupID})
+				db.MongoDB.Collection("messages").DeleteMany(ctx, bson.M{"group_id": groupID})
+			} else {
+				// Promote first remaining member or admin to owner
+				newOwnerID := updatedGroup.Members[0]
+				if len(updatedGroup.Admins) > 0 {
+					newOwnerID = updatedGroup.Admins[0]
+				}
+				db.MongoDB.Collection("groups").UpdateOne(
+					ctx,
+					bson.M{"_id": groupID},
+					bson.M{"$set": bson.M{"owner_id": newOwnerID}},
+				)
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Member removed successfully"})
+}
+
+func AddGroupAdmin(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req GroupAdminReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	targetUserID, err := primitive.ObjectIDFromHex(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target user ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Find group and verify current user is owner
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "owner_id": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only the group owner can manage administrators"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Verify target is a member of the group
+	isMember := false
+	for _, m := range group.Members {
+		if m == targetUserID {
+			isMember = true
+			break
+		}
+	}
+
+	if !isMember {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Target user is not a member of this group"})
+		return
+	}
+
+	// Add to admins
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{"$addToSet": bson.M{"admins": targetUserID}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add administrator"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Administrator added successfully"})
+}
+
+func RemoveGroupAdmin(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	targetUserIDStr := c.Param("user_id")
+	targetUserID, err := primitive.ObjectIDFromHex(targetUserIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target user ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Find group and verify current user is owner
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "owner_id": currentUserID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only the group owner can manage administrators"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Pull from admins
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{"$pull": bson.M{"admins": targetUserID}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove administrator"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Administrator removed successfully"})
+}
+
+func GetGroupMessages(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Verify group membership
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": userID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Fetch messages sorted by time
+	opts := options.Find().SetSort(bson.M{"created_at": 1})
+	filter := bson.M{
+		"group_id": groupID,
+	}
+
+	sinceStr := c.Query("since")
+	if sinceStr != "" {
+		sinceTime, err := time.Parse(time.RFC3339, sinceStr)
+		if err != nil {
+			sinceTime, err = time.Parse(time.RFC3339Nano, sinceStr)
+		}
+		if err == nil {
+			filter["created_at"] = bson.M{"$gt": sinceTime}
+		} else {
+			log.Printf("Failed to parse since parameter '%s': %v", sinceStr, err)
+		}
+	}
+
+	cursor, err := db.MongoDB.Collection("messages").Find(ctx, filter, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch chat history"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var dbMsgs []models.Message
+	if err = cursor.All(ctx, &dbMsgs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode messages"})
+		return
+	}
+
+	type MessageResponse struct {
+		ID        string    `json:"id"`
+		SenderID  string    `json:"sender_id"`
+		GroupID   string    `json:"group_id,omitempty"`
+		Content   string    `json:"content"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	response := make([]MessageResponse, 0)
+	for _, m := range dbMsgs {
+		response = append(response, MessageResponse{
+			ID:        m.ID.Hex(),
+			SenderID:  m.SenderID.Hex(),
+			GroupID:   m.GroupID.Hex(),
+			Content:   m.Content,
+			CreatedAt: m.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
+}

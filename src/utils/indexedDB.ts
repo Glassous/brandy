@@ -1,10 +1,11 @@
 export interface LocalMessage {
   id: string;
   sender_id: string;
-  receiver_id: string;
+  receiver_id?: string;
+  group_id?: string;
   content: string;
   created_at: string;
-  friend_id: string; // Helper field to easily query by friend ID
+  friend_id?: string; // Helper field to easily query by friend ID
 }
 
 export interface SyncState {
@@ -23,7 +24,7 @@ export class LocalChatDB {
 
   open(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, 1);
+      const request = indexedDB.open(this.dbName, 2);
 
       request.onerror = () => {
         reject(new Error("Failed to open IndexedDB"));
@@ -36,10 +37,20 @@ export class LocalChatDB {
 
       request.onupgradeneeded = () => {
         const db = request.result;
+        let messageStore: IDBObjectStore;
         if (!db.objectStoreNames.contains('messages')) {
-          const messageStore = db.createObjectStore('messages', { keyPath: 'id' });
+          messageStore = db.createObjectStore('messages', { keyPath: 'id' });
           messageStore.createIndex('friend_id', 'friend_id', { unique: false });
           messageStore.createIndex('created_at', 'created_at', { unique: false });
+          messageStore.createIndex('group_id', 'group_id', { unique: false });
+        } else {
+          const transaction = request.transaction;
+          if (transaction) {
+            messageStore = transaction.objectStore('messages');
+            if (!messageStore.indexNames.contains('group_id')) {
+              messageStore.createIndex('group_id', 'group_id', { unique: false });
+            }
+          }
         }
         if (!db.objectStoreNames.contains('sync_states')) {
           db.createObjectStore('sync_states', { keyPath: 'friend_id' });
@@ -98,6 +109,29 @@ export class LocalChatDB {
     });
   }
 
+  // Get messages for a group
+  getGroupMessages(groupId: string, deletedBefore: string | null): Promise<LocalMessage[]> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error("Database not open"));
+
+      const transaction = this.db.transaction(['messages'], 'readonly');
+      const store = transaction.objectStore('messages');
+      const index = store.index('group_id');
+      const request = index.getAll(IDBKeyRange.only(groupId));
+
+      request.onsuccess = () => {
+        let list = request.result as LocalMessage[];
+        if (deletedBefore) {
+          list = list.filter(m => m.created_at > deletedBefore);
+        }
+        list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        resolve(list);
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   // Clear messages for a specific friend
   clearMessages(friendId: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -107,6 +141,30 @@ export class LocalChatDB {
       const store = transaction.objectStore('messages');
       const index = store.index('friend_id');
       const request = index.openCursor(IDBKeyRange.only(friendId));
+
+      request.onsuccess = (event) => {
+        const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  // Clear messages for a specific group
+  clearGroupMessages(groupId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error("Database not open"));
+
+      const transaction = this.db.transaction(['messages'], 'readwrite');
+      const store = transaction.objectStore('messages');
+      const index = store.index('group_id');
+      const request = index.openCursor(IDBKeyRange.only(groupId));
 
       request.onsuccess = (event) => {
         const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;

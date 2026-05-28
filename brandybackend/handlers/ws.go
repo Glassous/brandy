@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,14 +75,16 @@ type WSMessage struct {
 }
 
 type RawMessagePayload struct {
-	ReceiverID string `json:"receiver_id"`
+	ReceiverID string `json:"receiver_id,omitempty"`
+	GroupID    string `json:"group_id,omitempty"`
 	Content    string `json:"content"`
 }
 
 type MessageEventData struct {
 	ID         string    `json:"id"`
 	SenderID   string    `json:"sender_id"`
-	ReceiverID string    `json:"receiver_id"`
+	ReceiverID string    `json:"receiver_id,omitempty"`
+	GroupID    string    `json:"group_id,omitempty"`
 	Content    string    `json:"content"`
 	CreatedAt  time.Time `json:"created_at"`
 }
@@ -161,12 +164,15 @@ func (c *Client) readPump() {
 				continue
 			}
 
-			if payload.ReceiverID == "" || payload.Content == "" {
+			if payload.Content == "" {
 				continue
 			}
 
-			// Handle saving to DB and broadcasting
-			go handleIncomingMessage(c.UserID, payload.ReceiverID, payload.Content)
+			if payload.ReceiverID != "" {
+				go handleIncomingMessage(c.UserID, payload.ReceiverID, payload.Content)
+			} else if payload.GroupID != "" {
+				go handleIncomingGroupMessage(c.UserID, payload.GroupID, payload.Content)
+			}
 		}
 	}
 }
@@ -265,6 +271,58 @@ func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
 	db.RedisClient.Publish(context.Background(), "user_messages:"+senderIDStr, wsMsgBytes)
 }
 
+func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
+	senderID, _ := primitive.ObjectIDFromHex(senderIDStr)
+	groupID, _ := primitive.ObjectIDFromHex(groupIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Verify group membership
+	var group models.Group
+	err := db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": senderID}).Decode(&group)
+	if err != nil {
+		log.Printf("Cannot send group message: User %s is not a member of group %s", senderIDStr, groupIDStr)
+		return
+	}
+
+	// Save to MongoDB
+	msg := models.Message{
+		ID:        primitive.NewObjectID(),
+		SenderID:  senderID,
+		GroupID:   groupID,
+		Content:   content,
+		IsRead:    false,
+		CreatedAt: time.Now(),
+	}
+
+	_, err = db.MongoDB.Collection("messages").InsertOne(ctx, msg)
+	if err != nil {
+		log.Printf("Failed to insert group message into MongoDB: %v", err)
+		return
+	}
+
+	eventData := MessageEventData{
+		ID:        msg.ID.Hex(),
+		SenderID:  senderIDStr,
+		GroupID:   groupIDStr,
+		Content:   content,
+		CreatedAt: msg.CreatedAt,
+	}
+
+	wsMsg := WSMessage{
+		Event: "message",
+		Data:  eventData,
+	}
+
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+
+	// Broadcast to all group members via Redis pub/sub
+	for _, memberID := range group.Members {
+		db.RedisClient.Publish(context.Background(), "user_messages:"+memberID.Hex(), wsMsgBytes)
+	}
+}
+
 func subscribeUserMessages(client *Client) {
 	pubsub := db.RedisClient.Subscribe(context.Background(), "user_messages:"+client.UserID)
 	defer pubsub.Close()
@@ -292,10 +350,11 @@ func GetChats(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Aggregation pipeline to find the last message with each friend
+	// Aggregation pipeline to find the last message with each friend in private chats
 	pipeline := []bson.M{
 		{
 			"$match": bson.M{
+				"group_id": bson.M{"$exists": false}, // Only private chats
 				"$or": []bson.M{
 					{"sender_id": userID},
 					{"receiver_id": userID},
@@ -373,6 +432,7 @@ func GetChats(c *gin.Context) {
 				FriendName:   friend.Nickname,
 				FriendRemark: remark,
 				FriendAvatar: friend.Avatar,
+				IsGroup:      false,
 				LastMessage:  rawChat.LastMessage,
 				LastMsgTime:  rawChat.LastMsgTime,
 				UnreadCount:  rawChat.UnreadCount,
@@ -380,7 +440,79 @@ func GetChats(c *gin.Context) {
 		}
 	}
 
+	// 2. Fetch group chats and calculate session details
+	var groups []models.Group
+	gCursor, err := db.MongoDB.Collection("groups").Find(ctx, bson.M{"members": userID})
+	if err == nil {
+		gCursor.All(ctx, &groups)
+		gCursor.Close(ctx)
+	}
+
+	for _, g := range groups {
+		var lastMsg models.Message
+		err := db.MongoDB.Collection("messages").FindOne(
+			ctx,
+			bson.M{"group_id": g.ID},
+			options.FindOne().SetSort(bson.M{"created_at": -1}),
+		).Decode(&lastMsg)
+
+		lastMessage := ""
+		lastMsgTime := g.CreatedAt
+		if err == nil {
+			lastMessage = lastMsg.Content
+			lastMsgTime = lastMsg.CreatedAt
+		}
+
+		// Calculate group name if empty
+		gName := g.Name
+		if gName == "" {
+			var memberNames []string
+			limit := len(g.Members)
+			if limit > 4 {
+				limit = 4
+			}
+			for i := 0; i < limit; i++ {
+				var member models.User
+				err := db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": g.Members[i]}).Decode(&member)
+				if err == nil {
+					memberNames = append(memberNames, member.Nickname)
+				}
+			}
+			if len(memberNames) > 0 {
+				gName = strings.Join(memberNames, ", ")
+				if len(g.Members) > 4 {
+					gName += "..."
+				}
+			} else {
+				gName = "群聊"
+			}
+		}
+
+		response = append(response, models.ChatSession{
+			GroupID:     g.ID.Hex(),
+			GroupName:   gName,
+			IsGroup:     true,
+			LastMessage: lastMessage,
+			LastMsgTime: lastMsgTime,
+			UnreadCount: 0, // Client tracks locally
+		})
+	}
+
+	// Sort response sessions by LastMsgTime descending
+	sortChatsByTime(response)
+
 	c.JSON(http.StatusOK, response)
+}
+
+// Helper to sort chat sessions by last message time
+func sortChatsByTime(chats []models.ChatSession) {
+	for i := 0; i < len(chats); i++ {
+		for j := i + 1; j < len(chats); j++ {
+			if chats[i].LastMsgTime.Before(chats[j].LastMsgTime) {
+				chats[i], chats[j] = chats[j], chats[i]
+			}
+		}
+	}
 }
 
 // GetChatMessages retrieves the conversation history with a specific friend

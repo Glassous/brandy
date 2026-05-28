@@ -13,16 +13,21 @@ export interface User {
 export interface Message {
   id: string;
   sender_id: string;
-  receiver_id: string;
+  receiver_id?: string;
+  group_id?: string;
   content: string;
   created_at: string;
 }
 
 export interface ChatSession {
-  friend_id: string;
-  friend_name: string;
+  friend_id?: string;
+  friend_name?: string;
   friend_remark?: string;
   friend_avatar?: string;
+  group_id?: string;
+  group_name?: string;
+  group_avatar?: string;
+  is_group?: boolean;
   last_message: string;
   last_msg_time: string;
   unread_count: number;
@@ -56,14 +61,14 @@ interface AppCtx {
   setActiveChatFriendId: (id: string | null) => void;
   login: (token: string, user: User) => void;
   logout: () => void;
-  sendMessage: (receiverId: string, content: string) => void;
-  loadChatMessages: (friendId: string) => Promise<void>;
+  sendMessage: (receiverId: string, content: string, isGroup?: boolean) => void;
+  loadChatMessages: (friendId: string, isGroup?: boolean) => Promise<void>;
   addFriend: (username: string) => Promise<boolean>;
   handleFriendRequest: (requestId: string, status: 'accepted' | 'rejected') => Promise<void>;
   deleteFriend: (friendId: string) => Promise<void>;
   updateNickname: (newNickname: string) => Promise<boolean>;
   uploadAvatar: (file: File) => Promise<string | null>;
-  startChat: (friendId: string, friendName: string) => void;
+  startChat: (friendId: string, friendName: string, isGroup?: boolean) => void;
   fetchChats: () => Promise<void>;
   fetchFriends: () => Promise<void>;
   fetchFriendRequests: () => Promise<void>;
@@ -73,10 +78,17 @@ interface AppCtx {
   hideChat: (friendId: string) => void;
   updateRemark: (friendId: string, remarkName: string) => void;
   togglePinChat: (friendId: string) => void;
-  deleteLocalChatHistory: (friendId: string) => Promise<void>;
+  deleteLocalChatHistory: (friendId: string, isGroup?: boolean) => Promise<void>;
   deleteAllLocalChatHistories: () => Promise<void>;
   deleteLocalMessage: (messageId: string) => Promise<void>;
   deleteLocalMessages: (messageIds: string[]) => Promise<void>;
+  createGroup: (name: string, members: string[]) => Promise<any>;
+  fetchGroupDetail: (groupId: string) => Promise<any>;
+  updateGroupName: (groupId: string, name: string) => Promise<boolean>;
+  addGroupMembers: (groupId: string, members: string[]) => Promise<boolean>;
+  removeGroupMember: (groupId: string, userId: string) => Promise<boolean>;
+  addGroupAdmin: (groupId: string, userId: string) => Promise<boolean>;
+  removeGroupAdmin: (groupId: string, userId: string) => Promise<boolean>;
 }
 
 const AppContext = createContext<AppCtx | null>(null);
@@ -201,7 +213,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch { /* ignore */ }
   }, [token, getHeaders]);
 
-  const loadChatMessages = useCallback(async (friendId: string) => {
+  const loadChatMessages = useCallback(async (friendId: string, isGroup?: boolean) => {
     if (!token) return;
 
     const db = localDbRef.current;
@@ -214,9 +226,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const syncState = await db.getSyncState(friendId);
         deletedBefore = syncState.deleted_before;
         lastSyncTime = syncState.last_sync_time;
-        localMsgs = await db.getMessages(friendId, deletedBefore);
+        if (isGroup) {
+          localMsgs = await db.getGroupMessages(friendId, deletedBefore);
+        } else {
+          localMsgs = await db.getMessages(friendId, deletedBefore);
+        }
         setMessages(localMsgs);
-        setChats(prev => prev.map(c => c.friend_id === friendId ? { ...c, unread_count: 0 } : c));
+        setChats(prev => prev.map(c => {
+          const cId = c.is_group ? c.group_id : c.friend_id;
+          return cId === friendId ? { ...c, unread_count: 0 } : c;
+        }));
       } catch (err) {
         console.error("Failed to load local chat history", err);
       }
@@ -226,11 +245,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
       const since = (!lastSyncTime || lastSyncTime < threeDaysAgo) ? threeDaysAgo : lastSyncTime;
 
-      const res = await fetch(`${API_BASE}/api/chats/${friendId}/messages?since=${since}`, { headers: getHeaders });
+      const url = isGroup
+        ? `${API_BASE}/api/groups/${friendId}/messages?since=${since}`
+        : `${API_BASE}/api/chats/${friendId}/messages?since=${since}`;
+
+      const res = await fetch(url, { headers: getHeaders });
       if (res.ok) {
         const serverMsgs: Message[] = await res.json();
         if (db && serverMsgs.length > 0) {
-          const messagesToSave = serverMsgs.map(m => ({ ...m, friend_id: friendId }));
+          const messagesToSave = serverMsgs.map(m => isGroup ? { ...m, group_id: friendId } : { ...m, friend_id: friendId });
           await db.saveMessages(messagesToSave);
           
           const maxTime = serverMsgs.reduce((max, m) => m.created_at > max ? m.created_at : max, since);
@@ -242,13 +265,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         if (db) {
-          const updatedMsgs = await db.getMessages(friendId, deletedBefore);
+          const updatedMsgs = isGroup
+            ? await db.getGroupMessages(friendId, deletedBefore)
+            : await db.getMessages(friendId, deletedBefore);
           setMessages(updatedMsgs);
         } else {
           setMessages(serverMsgs);
         }
 
-        setChats(prev => prev.map(c => c.friend_id === friendId ? { ...c, unread_count: 0 } : c));
+        setChats(prev => prev.map(c => {
+          const cId = c.is_group ? c.group_id : c.friend_id;
+          return cId === friendId ? { ...c, unread_count: 0 } : c;
+        }));
         fetchChats();
       }
     } catch (err) {
@@ -418,7 +446,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [token, user, fetchChats, fetchFriends, showToast]);
 
-  const startChat = useCallback((friendId: string, friendName: string) => {
+  const startChat = useCallback((friendId: string, friendName: string, isGroup?: boolean) => {
     if (user) {
       setHiddenChats(prev => {
         if (prev.includes(friendId)) {
@@ -430,28 +458,181 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     }
     setChats(prev => {
-      if (prev.some(c => c.friend_id === friendId)) return prev;
-      return [{
+      const exists = prev.some(c => (isGroup ? c.group_id : c.friend_id) === friendId);
+      if (exists) return prev;
+      const newSession = isGroup ? {
+        group_id: friendId,
+        group_name: friendName,
+        is_group: true,
+        last_message: '',
+        last_msg_time: new Date().toISOString(),
+        unread_count: 0,
+      } : {
         friend_id: friendId,
         friend_name: friendName,
         last_message: '',
         last_msg_time: new Date().toISOString(),
         unread_count: 0,
-      }, ...prev];
+      };
+      return [newSession, ...prev];
     });
     setActiveChatFriendId(friendId);
   }, [user]);
 
-  const sendMessage = useCallback((receiverId: string, content: string) => {
+  const sendMessage = useCallback((receiverId: string, content: string, isGroup?: boolean) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         event: 'message',
-        data: { receiver_id: receiverId, content },
+        data: isGroup ? { group_id: receiverId, content } : { receiver_id: receiverId, content },
       }));
     } else {
       showToast('消息发送失败，正在重连...', 'error');
     }
   }, [showToast]);
+
+  const createGroup = useCallback(async (name: string, members: string[]) => {
+    if (!token) return null;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ name, members }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('群聊创建成功', 'success');
+        fetchChats();
+        return data;
+      } else {
+        showToast(data.error || '创建群聊失败', 'error');
+        return null;
+      }
+    } catch {
+      showToast('网络错误，创建群聊失败', 'error');
+      return null;
+    }
+  }, [token, getHeaders, fetchChats, showToast]);
+
+  const fetchGroupDetail = useCallback(async (groupId: string) => {
+    if (!token) return null;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}`, { headers: getHeaders });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch { /* ignore */ }
+    return null;
+  }, [token, getHeaders]);
+
+  const updateGroupName = useCallback(async (groupId: string, name: string) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}`, {
+        method: 'PUT',
+        headers: getHeaders,
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('群名已更新', 'success');
+        fetchChats();
+        return true;
+      } else {
+        showToast(data.error || '修改群名失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误，修改失败', 'error');
+      return false;
+    }
+  }, [token, getHeaders, fetchChats, showToast]);
+
+  const addGroupMembers = useCallback(async (groupId: string, members: string[]) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/members`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ members }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('邀请成功', 'success');
+        return true;
+      } else {
+        showToast(data.error || '邀请失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误，邀请失败', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const removeGroupMember = useCallback(async (groupId: string, userId: string) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/members/${userId}`, {
+        method: 'DELETE',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(userId === user?.id ? '已退群' : '已移出群聊', 'success');
+        fetchChats();
+        return true;
+      } else {
+        showToast(data.error || '移出群聊失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误，操作失败', 'error');
+      return false;
+    }
+  }, [token, user, getHeaders, fetchChats, showToast]);
+
+  const addGroupAdmin = useCallback(async (groupId: string, userId: string) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/admins`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ user_id: userId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('设置管理员成功', 'success');
+        return true;
+      } else {
+        showToast(data.error || '设置管理员失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const removeGroupAdmin = useCallback(async (groupId: string, userId: string) => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/admins/${userId}`, {
+        method: 'DELETE',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('取消管理员成功', 'success');
+        return true;
+      } else {
+        showToast(data.error || '操作失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
 
   const login = useCallback((newToken: string, loggedUser: User) => {
     setToken(newToken);
@@ -477,13 +658,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     showToast('已登出', 'info');
   }, [showToast]);
 
-  const deleteLocalChatHistory = useCallback(async (friendId: string) => {
+  const deleteLocalChatHistory = useCallback(async (friendId: string, isGroup?: boolean) => {
     const db = localDbRef.current;
     if (!db) return;
     try {
-      const session = chats.find(c => c.friend_id === friendId);
+      const session = chats.find(c => (isGroup ? c.group_id : c.friend_id) === friendId);
       const nowStr = session?.last_msg_time || new Date().toISOString();
-      await db.clearMessages(friendId);
+      if (isGroup) {
+        await db.clearGroupMessages(friendId);
+      } else {
+        await db.clearMessages(friendId);
+      }
       const current = await db.getSyncState(friendId);
       await db.updateSyncState({
         ...current,
@@ -510,9 +695,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await db.updateAllSyncStates(bufferTime);
       setMessages([]);
       
-      const allFriendIds = chats.map(c => c.friend_id);
-      setHiddenChats(allFriendIds);
-      localStorage.setItem(`brandy_hidden_chats_${user.id}`, JSON.stringify(allFriendIds));
+      const allChatIds = chats.map(c => c.group_id || c.friend_id).filter((id): id is string => !!id);
+      setHiddenChats(allChatIds);
+      localStorage.setItem(`brandy_hidden_chats_${user.id}`, JSON.stringify(allChatIds));
 
       showToast("所有本地聊天记录已清除", "success");
       fetchChats();
@@ -568,12 +753,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             const currentActiveFriendId = activeChatFriendIdRef.current;
 
             if (currentUser) {
-              const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
+              const isGroupMsg = !!m.group_id;
+              const partnerId = isGroupMsg ? m.group_id! : (m.sender_id === currentUser.id ? m.receiver_id! : m.sender_id);
               
               // Save received message to IndexedDB and update sync_states
               const db = localDbRef.current;
               if (db) {
-                db.saveMessages([{ ...m, friend_id: partnerId }]).then(async () => {
+                const savePayload = isGroupMsg ? { ...m, group_id: partnerId } : { ...m, friend_id: partnerId };
+                db.saveMessages([savePayload]).then(async () => {
                   const state = await db.getSyncState(partnerId);
                   await db.updateSyncState({
                     ...state,
@@ -653,6 +840,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deleteAllLocalChatHistories,
       deleteLocalMessage,
       deleteLocalMessages,
+      createGroup,
+      fetchGroupDetail,
+      updateGroupName,
+      addGroupMembers,
+      removeGroupMember,
+      addGroupAdmin,
+      removeGroupAdmin,
     }}>
       {children}
     </AppContext.Provider>

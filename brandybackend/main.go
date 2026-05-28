@@ -82,6 +82,17 @@ func main() {
 		api.GET("/chats", handlers.GetChats)
 		api.GET("/chats/:friend_id/messages", handlers.GetChatMessages)
 
+		// Group chat routes
+		api.POST("/groups", handlers.CreateGroup)
+		api.GET("/groups", handlers.GetGroups)
+		api.GET("/groups/:group_id", handlers.GetGroupDetail)
+		api.PUT("/groups/:group_id", handlers.UpdateGroup)
+		api.POST("/groups/:group_id/members", handlers.AddGroupMembers)
+		api.DELETE("/groups/:group_id/members/:user_id", handlers.RemoveGroupMember)
+		api.POST("/groups/:group_id/admins", handlers.AddGroupAdmin)
+		api.DELETE("/groups/:group_id/admins/:user_id", handlers.RemoveGroupAdmin)
+		api.GET("/groups/:group_id/messages", handlers.GetGroupMessages)
+
 		// Cloud Disk Routes
 		api.GET("/disk/items", handlers.GetDiskItems)
 		api.GET("/disk/usage", handlers.GetDiskUsage)

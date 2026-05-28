@@ -7,12 +7,13 @@ import { API_BASE } from '../../config';
 
 interface ChatRoomProps {
   currentUserId: string;
-  friendId: string;
-  friendName?: string;
-  friendAvatar?: string;
+  chatId: string;
+  isGroup?: boolean;
+  chatName?: string;
+  chatAvatar?: string;
   messages: Message[];
-  onSend: (receiverId: string, content: string) => void;
-  onLoad: (friendId: string) => Promise<void>;
+  onSend: (chatId: string, content: string) => void;
+  onLoad: (chatId: string, isGroup?: boolean) => Promise<void>;
   onBack?: () => void;
 }
 
@@ -177,16 +178,67 @@ function formatTime(ts: string) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, messages, onSend, onLoad, onBack }: ChatRoomProps) {
+export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar, messages, onSend, onLoad, onBack }: ChatRoomProps) {
   const [text, setText] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  const { deleteLocalMessage, deleteLocalMessages } = useApp();
+  const {
+    deleteLocalMessage,
+    deleteLocalMessages,
+    chats,
+    friends,
+    remarks,
+    sendMessage,
+    fetchGroupDetail,
+    updateGroupName,
+    addGroupMembers,
+    removeGroupMember,
+    addGroupAdmin,
+    removeGroupAdmin
+  } = useApp();
   const { showToast } = useToast();
 
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, messageId: string, content: string } | null>(null);
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+
+  // Group Details & Settings Drawer State
+  const [groupDetail, setGroupDetail] = useState<any>(null);
+  const [showGroupSettings, setShowGroupSettings] = useState(false);
+
+  // Invite Members Modal State
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [selectedInviteFriends, setSelectedInviteFriends] = useState<string[]>([]);
+
+  // Forward Modal State
+  const [showForwardModal, setShowForwardModal] = useState(false);
+  const [messagesToForward, setMessagesToForward] = useState<string[]>([]);
+  const [forwardTargets, setForwardTargets] = useState<{ id: string, name: string, isGroup: boolean }[]>([]);
+
+  // Load chat and fetch group info
+  useEffect(() => {
+    onLoad(chatId, isGroup);
+    if (isGroup) {
+      const getDetail = async () => {
+        const detail = await fetchGroupDetail(chatId);
+        setGroupDetail(detail);
+      };
+      getDetail();
+      setShowGroupSettings(false);
+    } else {
+      setGroupDetail(null);
+      setShowGroupSettings(false);
+    }
+  }, [chatId, isGroup, onLoad, fetchGroupDetail]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  const refreshGroupDetail = async () => {
+    if (isGroup) {
+      const detail = await fetchGroupDetail(chatId);
+      setGroupDetail(detail);
+    }
+  };
 
   // Close context menu on click elsewhere
   useEffect(() => {
@@ -249,23 +301,126 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
     }
   };
 
-  useEffect(() => { onLoad(friendId); }, [friendId, onLoad]);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
   const handleShowDetails = () => {
-    navigate('/contacts', { state: { showDetailOfFriendId: friendId } });
+    if (isGroup) {
+      setShowGroupSettings(prev => !prev);
+    } else {
+      navigate('/contacts', { state: { showDetailOfFriendId: chatId } });
+    }
   };
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
-    onSend(friendId, text.trim());
+    onSend(chatId, text.trim());
     setText('');
   };
 
+  // Group Details Management
+  const handleRenameGroup = async () => {
+    if (!groupDetail) return;
+    const newName = prompt("请输入新的群聊名称：", groupDetail.name);
+    if (newName !== null) {
+      const ok = await updateGroupName(chatId, newName.trim());
+      if (ok) {
+        refreshGroupDetail();
+      }
+    }
+  };
+
+  const handleLeaveGroup = async () => {
+    if (!window.confirm("确定要退出该群聊吗？")) return;
+    const ok = await removeGroupMember(chatId, currentUserId);
+    if (ok) {
+      onBack?.();
+    }
+  };
+
+  const handleKickMember = async (userId: string, userNickname: string) => {
+    if (!window.confirm(`确定要将 ${userNickname} 移出群聊吗？`)) return;
+    const ok = await removeGroupMember(chatId, userId);
+    if (ok) {
+      refreshGroupDetail();
+    }
+  };
+
+  const handleToggleAdmin = async (userId: string, isAdmin: boolean) => {
+    let ok = false;
+    if (isAdmin) {
+      ok = await removeGroupAdmin(chatId, userId);
+    } else {
+      ok = await addGroupAdmin(chatId, userId);
+    }
+    if (ok) {
+      refreshGroupDetail();
+    }
+  };
+
+  const handleInviteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedInviteFriends.length === 0) return;
+    const ok = await addGroupMembers(chatId, selectedInviteFriends);
+    if (ok) {
+      setShowInviteModal(false);
+      setSelectedInviteFriends([]);
+      refreshGroupDetail();
+    }
+  };
+
+  // Forwarding Methods
+  const handleForwardSingle = (content: string) => {
+    setMessagesToForward([content]);
+    setForwardTargets([]);
+    setShowForwardModal(true);
+    setContextMenu(null);
+  };
+
+  const handleForwardMultiple = () => {
+    if (selectedMessageIds.size === 0) return;
+    const selectedMsgs = messages.filter(m => selectedMessageIds.has(m.id)).map(m => m.content);
+    setMessagesToForward(selectedMsgs);
+    setForwardTargets([]);
+    setShowForwardModal(true);
+  };
+
+  const handleForwardSubmit = async () => {
+    if (forwardTargets.length === 0 || messagesToForward.length === 0) return;
+    
+    for (const target of forwardTargets) {
+      for (const msgContent of messagesToForward) {
+        sendMessage(target.id, msgContent, target.isGroup);
+        await new Promise(r => setTimeout(r, 80));
+      }
+    }
+    
+    showToast(`消息已转发`, 'success');
+    setShowForwardModal(false);
+    setIsMultiSelect(false);
+    setSelectedMessageIds(new Set());
+  };
+
+  const toggleForwardTarget = (id: string, name: string, isGroup: boolean) => {
+    setForwardTargets(prev => {
+      const exists = prev.some(t => t.id === id);
+      if (exists) {
+        return prev.filter(t => t.id !== id);
+      } else {
+        return [...prev, { id, name, isGroup }];
+      }
+    });
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden', background: 'var(--bg)' }}>
       <style>{`
+        .cr-main-area {
+          display: flex;
+          flex-direction: column;
+          flex: 1;
+          height: 100%;
+          overflow: hidden;
+          background: var(--bg);
+        }
         .cr-header {
           display: flex;
           align-items: center;
@@ -283,6 +438,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           font-weight: 700;
           font-size: 15px;
           flex: 1;
+          color: var(--text);
         }
         .cr-info {
           background: none;
@@ -291,6 +447,8 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           display: flex;
           border-radius: var(--radius);
           transition: color 0.2s, background-color 0.2s;
+          border: none;
+          cursor: pointer;
         }
         .cr-info:hover { color: var(--brand-blue); background: var(--hover); }
         
@@ -315,6 +473,14 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           }
           .cr-input-bar {
             padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+          }
+          .cr-settings-sidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            z-index: 1500;
+            box-shadow: -4px 0 16px rgba(0,0,0,0.15);
           }
         }
  
@@ -409,10 +575,12 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
           background: var(--bg);
           padding: 11px 18px;
           font-size: 14px;
+          color: var(--text);
           transition: border-color 0.2s, box-shadow 0.2s;
         }
         .cr-input-bar input:focus {
           border-color: var(--text);
+          outline: none;
         }
         .cr-send {
           width: 42px;
@@ -485,6 +653,7 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
         .cr-multi-select-info {
           font-size: 14px;
           font-weight: 500;
+          color: var(--text);
         }
         .cr-multi-select-actions {
           display: flex;
@@ -578,133 +747,468 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
         .share-card-btn.primary:hover:not(:disabled) {
           opacity: 0.9;
         }
-      `}</style>
- 
-      {/* Header Info */}
-      <div className="cr-header">
-        {onBack && (
-          <button className="cr-back-btn" onClick={onBack} title="返回会话列表">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="19" y1="12" x2="5" y2="12" />
-              <polyline points="12 19 5 12 12 5" />
-            </svg>
-          </button>
-        )}
-        <span className="cr-name">{friendName || '聊天'}</span>
-        <button className="cr-info" title="查看资料" onClick={handleShowDetails}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-        </button>
-      </div>
- 
-      {/* Messages Scroll Area */}
-      <div className="cr-msgs">
-        {messages.length === 0 ? (
-          <div className="cr-empty">打个招呼吧</div>
-        ) : (
-          messages.map((m, i) => {
-            const isOwn = m.sender_id === currentUserId;
-            const isFirstOfGroup = i === 0 || messages[i - 1].sender_id !== m.sender_id;
- 
-            // Shared timestamp helper: display time below bubble at 5-minute intervals or for last message
-            let showTime = false;
-            if (i === messages.length - 1) {
-              showTime = true;
-            } else {
-              const nextMsg = messages[i + 1];
-              const currentMs = new Date(m.created_at).getTime();
-              const nextMs = new Date(nextMsg.created_at).getTime();
-              showTime = (nextMs - currentMs) > 5 * 60 * 1000;
-            }
- 
-            return (
-              <div key={m.id} className="msg-container">
-                <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
-                  {isMultiSelect && (
-                    <input
-                      type="checkbox"
-                      className="msg-checkbox"
-                      checked={selectedMessageIds.has(m.id)}
-                      onChange={() => handleToggleSelect(m.id)}
-                    />
-                  )}
-                  {!isOwn && (
-                    isFirstOfGroup ? (
-                      <Avatar name={friendName || '?'} url={friendAvatar} size={32} fontSize={13} />
-                    ) : (
-                      <div style={{ width: 32, flexShrink: 0 }} />
-                    )
-                  )}
-                  <div
-                    className={`msg-bubble ${isOwn ? 'bubble-own' : 'bubble-other'} ${isFirstOfGroup ? 'first-of-group' : 'consecutive'}`}
-                    onContextMenu={(e) => handleContextMenu(e, m.id, m.content)}
-                    onClick={() => isMultiSelect && handleToggleSelect(m.id)}
-                    style={{ cursor: isMultiSelect ? 'pointer' : 'default' }}
-                  >
-                    {(() => {
-                      let fileShareData = null;
-                      if (m.content.startsWith('{')) {
-                        try {
-                          const parsed = JSON.parse(m.content);
-                          if (parsed && parsed.type === 'file_share') {
-                            fileShareData = parsed;
-                          }
-                        } catch { /* ignore */ }
-                      }
 
-                      if (fileShareData) {
-                        return <FileShareCard fileShareData={fileShareData} isOwn={isOwn} />;
-                      }
-                      return <span className="msg-text">{m.content}</span>;
-                    })()}
-                  </div>
-                </div>
-                {showTime && (
-                  <div className={`msg-time-container ${isOwn ? 'time-own' : 'time-other'}`}>
-                    {formatTime(m.created_at)}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-        <div ref={bottomRef} />
-      </div>
- 
-      {/* Input Sender Bar or Multi-Select Bar */}
-      {isMultiSelect ? (
-        <div className="cr-multi-select-bar">
-          <span className="cr-multi-select-info">已选择 {selectedMessageIds.size} 条消息</span>
-          <div className="cr-multi-select-actions">
-            <button className="btn btn-secondary" onClick={handleCancelMultiSelect}>
-              取消
+        /* Group Settings Sidebar */
+        .cr-settings-sidebar {
+          width: 280px;
+          border-left: 1px solid var(--border);
+          background: var(--bg-paper);
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          overflow-y: auto;
+          flex-shrink: 0;
+          animation: slideInRight 0.2s ease-out;
+        }
+        @keyframes slideInRight {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+        .cr-settings-section {
+          padding: 16px;
+          border-bottom: 1px solid var(--border);
+        }
+        .cr-settings-title {
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--text-dim);
+          text-transform: uppercase;
+          margin-bottom: 12px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .cr-settings-group-name {
+          font-weight: 700;
+          font-size: 15px;
+          text-align: center;
+          color: var(--text);
+        }
+        .cr-settings-member-list {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          max-height: 350px;
+          overflow-y: auto;
+        }
+        .cr-settings-member-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          font-size: 13px;
+        }
+        .member-info {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          overflow: hidden;
+          flex: 1;
+        }
+        .member-name {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          font-weight: 500;
+          color: var(--text);
+        }
+        .member-badge {
+          font-size: 9px;
+          padding: 1px 4px;
+          border-radius: 4px;
+          font-weight: 700;
+        }
+        .badge-owner {
+          background: rgba(212, 184, 122, 0.15);
+          color: var(--brand-yellow);
+        }
+        .badge-admin {
+          background: rgba(0, 122, 255, 0.15);
+          color: var(--brand-blue);
+        }
+        .cr-settings-member-actions {
+          display: flex;
+          gap: 4px;
+        }
+        .member-action-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 4px;
+          border-radius: 4px;
+          color: var(--text-dim);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .member-action-btn:hover {
+          background: var(--hover);
+          color: var(--text);
+        }
+        .member-action-btn.danger:hover {
+          color: var(--badge-unread);
+        }
+      `}</style>
+
+      {/* Main Chat Area */}
+      <div className="cr-main-area">
+        {/* Header Info */}
+        <div className="cr-header">
+          {onBack && (
+            <button className="cr-back-btn" onClick={onBack} title="返回会话列表">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12" />
+                <polyline points="12 19 5 12 12 5" />
+              </svg>
             </button>
+          )}
+          <span className="cr-name">{chatName || '聊天'}</span>
+          <button className="cr-info" title={isGroup ? "群设置" : "查看资料"} onClick={handleShowDetails}>
+            {isGroup ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+            )}
+          </button>
+        </div>
+ 
+        {/* Messages Scroll Area */}
+        <div className="cr-msgs">
+          {messages.length === 0 ? (
+            <div className="cr-empty">打个招呼吧</div>
+          ) : (
+            messages.map((m, i) => {
+              const isOwn = m.sender_id === currentUserId;
+              const isFirstOfGroup = i === 0 || messages[i - 1].sender_id !== m.sender_id;
+
+              // Resolve sender nickname & avatar for group chats
+              let senderNickname = '';
+              let senderAvatar = undefined;
+              if (isGroup && groupDetail && groupDetail.members) {
+                const member = groupDetail.members.find((mb: any) => mb.id === m.sender_id);
+                if (member) {
+                  senderNickname = member.nickname;
+                  senderAvatar = member.avatar;
+                }
+              }
+   
+              let showTime = false;
+              if (i === messages.length - 1) {
+                showTime = true;
+              } else {
+                const nextMsg = messages[i + 1];
+                const currentMs = new Date(m.created_at).getTime();
+                const nextMs = new Date(nextMsg.created_at).getTime();
+                showTime = (nextMs - currentMs) > 5 * 60 * 1000;
+              }
+   
+              return (
+                <div key={m.id} className="msg-container">
+                  <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
+                    {isMultiSelect && (
+                      <input
+                        type="checkbox"
+                        className="msg-checkbox"
+                        checked={selectedMessageIds.has(m.id)}
+                        onChange={() => handleToggleSelect(m.id)}
+                      />
+                    )}
+                    {!isOwn && (
+                      isFirstOfGroup ? (
+                        <Avatar name={senderNickname || chatName || '?'} url={isGroup ? senderAvatar : chatAvatar} size={32} fontSize={13} />
+                      ) : (
+                        <div style={{ width: 32, flexShrink: 0 }} />
+                      )
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, maxWidth: '70%', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
+                      {isGroup && !isOwn && isFirstOfGroup && senderNickname && (
+                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 2, marginLeft: 4 }}>
+                          {senderNickname}
+                        </span>
+                      )}
+                      <div
+                        className={`msg-bubble ${isOwn ? 'bubble-own' : 'bubble-other'} ${isFirstOfGroup ? 'first-of-group' : 'consecutive'}`}
+                        onContextMenu={(e) => handleContextMenu(e, m.id, m.content)}
+                        onClick={() => isMultiSelect && handleToggleSelect(m.id)}
+                        style={{ cursor: isMultiSelect ? 'pointer' : 'default', maxWidth: '100%' }}
+                      >
+                        {(() => {
+                          let fileShareData = null;
+                          if (m.content.startsWith('{')) {
+                            try {
+                              const parsed = JSON.parse(m.content);
+                              if (parsed && parsed.type === 'file_share') {
+                                fileShareData = parsed;
+                              }
+                            } catch { /* ignore */ }
+                          }
+
+                          if (fileShareData) {
+                            return <FileShareCard fileShareData={fileShareData} isOwn={isOwn} />;
+                          }
+                          return <span className="msg-text">{m.content}</span>;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                  {showTime && (
+                    <div className={`msg-time-container ${isOwn ? 'time-own' : 'time-other'}`}>
+                      {formatTime(m.created_at)}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+          <div ref={bottomRef} />
+        </div>
+   
+        {/* Input Sender Bar or Multi-Select Bar */}
+        {isMultiSelect ? (
+          <div className="cr-multi-select-bar">
+            <span className="cr-multi-select-info">已选择 {selectedMessageIds.size} 条消息</span>
+            <div className="cr-multi-select-actions">
+              <button className="btn btn-secondary" onClick={handleCancelMultiSelect}>
+                取消
+              </button>
+              <button className="btn btn-secondary" onClick={handleForwardMultiple} disabled={selectedMessageIds.size === 0}>
+                转发
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={handleConfirmDeleteMultiple}
+                disabled={selectedMessageIds.size === 0}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSend} className="cr-input-bar">
+            <input
+              type="text"
+              placeholder="输入消息..."
+              value={text}
+              onChange={e => setText(e.target.value)}
+            />
+            <button type="submit" className="btn cr-send" disabled={!text.trim()}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13" />
+                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+              </svg>
+            </button>
+          </form>
+        )}
+      </div>
+
+      {/* Group Settings Sidebar */}
+      {isGroup && showGroupSettings && groupDetail && (
+        <div className="cr-settings-sidebar">
+          <div className="cr-settings-section" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+            <Avatar name={chatName || '群聊'} url={chatAvatar} size={64} fontSize={24} />
+            <div className="cr-settings-group-name" style={{ marginTop: 8, fontWeight: 700, fontSize: 16 }}>
+              {groupDetail.name || '未命名群聊'}
+            </div>
+            {/* Show edit button for owner/admin */}
+            {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+              <button className="btn btn-secondary" style={{ marginTop: 8, fontSize: 12, padding: '4px 8px', borderRadius: 4 }} onClick={handleRenameGroup}>
+                修改群名
+              </button>
+            )}
+          </div>
+
+          <div className="cr-settings-section">
+            <div className="cr-settings-title">
+              <span>群成员 ({groupDetail.members?.length || 0})</span>
+              <button
+                className="member-action-btn"
+                title="邀请好友"
+                onClick={() => {
+                  setSelectedInviteFriends([]);
+                  setShowInviteModal(true);
+                }}
+                style={{ color: 'var(--brand-blue)', fontSize: 14 }}
+              >
+                ➕
+              </button>
+            </div>
+            <div className="cr-settings-member-list">
+              {groupDetail.members?.map((member: any) => {
+                const isOwner = member.id === groupDetail.owner_id;
+                const isAdmin = groupDetail.admins?.includes(member.id);
+                const isMe = member.id === currentUserId;
+                const canKick = (groupDetail.owner_id === currentUserId && !isOwner) || (groupDetail.admins?.includes(currentUserId) && !isOwner && !isAdmin);
+                const canSetAdmin = groupDetail.owner_id === currentUserId && !isOwner;
+
+                return (
+                  <div key={member.id} className="cr-settings-member-item">
+                    <div className="member-info">
+                      <Avatar name={member.nickname} url={member.avatar} size={28} />
+                      <span className="member-name">{member.nickname}</span>
+                      {isOwner && <span className="member-badge badge-owner">群主</span>}
+                      {isAdmin && <span className="member-badge badge-admin">管理员</span>}
+                    </div>
+                    <div className="cr-settings-member-actions">
+                      {canSetAdmin && (
+                        <button
+                          className="member-action-btn"
+                          title={isAdmin ? "取消管理员" : "设为管理员"}
+                          onClick={() => handleToggleAdmin(member.id, isAdmin)}
+                          style={{ fontSize: 11 }}
+                        >
+                          🛡️
+                        </button>
+                      )}
+                      {canKick && !isMe && (
+                        <button
+                          className="member-action-btn danger"
+                          title="移出群聊"
+                          onClick={() => handleKickMember(member.id, member.nickname)}
+                          style={{ fontSize: 11 }}
+                        >
+                          ❌
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="cr-settings-section" style={{ marginTop: 'auto', borderBottom: 'none' }}>
             <button
               className="btn btn-danger"
-              onClick={handleConfirmDeleteMultiple}
-              disabled={selectedMessageIds.size === 0}
+              style={{ width: '100%', borderRadius: 8, padding: '10px' }}
+              onClick={handleLeaveGroup}
             >
-              删除
+              退出群聊
             </button>
           </div>
         </div>
-      ) : (
-        <form onSubmit={handleSend} className="cr-input-bar">
-          <input
-            type="text"
-            placeholder="输入消息..."
-            value={text}
-            onChange={e => setText(e.target.value)}
-          />
-          <button type="submit" className="btn cr-send" disabled={!text.trim()}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
-        </form>
+      )}
+
+      {/* Invite Friends Modal */}
+      {showInviteModal && (
+        <div className="modal-overlay" onClick={() => setShowInviteModal(false)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">邀请好友入群</span>
+              <button className="modal-close-btn" onClick={() => setShowInviteModal(false)}>×</button>
+            </div>
+            <form onSubmit={handleInviteSubmit}>
+              <div className="modal-body" style={{ maxHeight: '50vh' }}>
+                <div className="friends-select-list">
+                  {friends.filter(f => !groupDetail.members?.some((mb: any) => mb.id === f.id)).length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)' }}>
+                      所有好友均已在群聊中。
+                    </div>
+                  ) : (
+                    friends
+                      .filter(f => !groupDetail.members?.some((mb: any) => mb.id === f.id))
+                      .map(f => (
+                        <div
+                          key={f.id}
+                          className={`friend-select-item ${selectedInviteFriends.includes(f.id) ? 'selected' : ''}`}
+                          onClick={() => {
+                            setSelectedInviteFriends(prev =>
+                              prev.includes(f.id) ? prev.filter(id => id !== f.id) : [...prev, f.id]
+                            );
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedInviteFriends.includes(f.id)}
+                            onChange={() => {}}
+                            style={{ pointerEvents: 'none', marginRight: 8 }}
+                          />
+                          <Avatar name={remarks[f.id] || f.nickname} url={f.avatar} size={32} />
+                          <span style={{ fontSize: 13, fontWeight: 500, marginLeft: 8 }}>
+                            {remarks[f.id] || f.nickname}
+                          </span>
+                        </div>
+                      ))
+                  )}
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowInviteModal(false)}>
+                  取消
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={selectedInviteFriends.length === 0}>
+                  确定
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Forward Message Modal */}
+      {showForwardModal && (
+        <div className="modal-overlay" onClick={() => setShowForwardModal(false)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">转发消息</span>
+              <button className="modal-close-btn" onClick={() => setShowForwardModal(false)}>×</button>
+            </div>
+            <div className="modal-body" style={{ maxHeight: '60vh' }}>
+              <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 8 }}>
+                选择要转发到的会话或联系人：
+              </div>
+              <div className="friends-select-list" style={{ maxHeight: '40vh' }}>
+                {chats.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-dim)' }}>
+                    暂无可用会话
+                  </div>
+                ) : (
+                  chats.map(c => {
+                    const id = c.is_group ? c.group_id! : c.friend_id!;
+                    const name = c.is_group ? c.group_name! : (remarks[c.friend_id!] || c.friend_name!);
+                    const avatar = c.is_group ? c.group_avatar : c.friend_avatar;
+                    return (
+                      <div
+                        key={`chat-${id}`}
+                        className={`friend-select-item ${forwardTargets.some(t => t.id === id) ? 'selected' : ''}`}
+                        onClick={() => toggleForwardTarget(id, name, !!c.is_group)}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={forwardTargets.some(t => t.id === id)}
+                          onChange={() => {}}
+                          style={{ pointerEvents: 'none', marginRight: 8 }}
+                        />
+                        <Avatar name={name} url={avatar} size={32} />
+                        <span style={{ fontSize: 13, fontWeight: 500, marginLeft: 8 }}>
+                          {name} {c.is_group && <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>(群组)</span>}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setShowForwardModal(false)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleForwardSubmit}
+                disabled={forwardTargets.length === 0}
+              >
+                确定 ({forwardTargets.length})
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Right-click Floating Context Menu */}
@@ -716,6 +1220,9 @@ export function ChatRoom({ currentUserId, friendId, friendName, friendAvatar, me
         >
           <button className="cr-context-menu-item" onClick={() => handleCopy(contextMenu.content)}>
             复制
+          </button>
+          <button className="cr-context-menu-item" onClick={() => handleForwardSingle(contextMenu.content)}>
+            转发
           </button>
           <button className="cr-context-menu-item" onClick={() => handleStartMultiSelect(contextMenu.messageId)}>
             多选

@@ -35,10 +35,20 @@ type FriendRequest struct {
 type Message struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	SenderID   primitive.ObjectID `bson:"sender_id" json:"sender_id"`
-	ReceiverID primitive.ObjectID `bson:"receiver_id" json:"receiver_id"`
+	ReceiverID primitive.ObjectID `bson:"receiver_id,omitempty" json:"receiver_id,omitempty"`
+	GroupID    primitive.ObjectID `bson:"group_id,omitempty" json:"group_id,omitempty"`
 	Content    string             `bson:"content" json:"content"`
 	IsRead     bool               `bson:"is_read" json:"is_read"`
 	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
+}
+
+type Group struct {
+	ID        primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
+	Name      string               `bson:"name" json:"name"`
+	OwnerID   primitive.ObjectID   `bson:"owner_id" json:"owner_id"`
+	Admins    []primitive.ObjectID `bson:"admins" json:"admins"`
+	Members   []primitive.ObjectID `bson:"members" json:"members"`
+	CreatedAt time.Time            `bson:"created_at" json:"created_at"`
 }
 
 // REST request/response shapes helper
@@ -50,11 +60,24 @@ type UserResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type GroupResponse struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	OwnerID   string         `json:"owner_id"`
+	Admins    []string       `json:"admins"`
+	Members   []UserResponse `json:"members"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
 type ChatSession struct {
-	FriendID      string    `json:"friend_id"`
-	FriendName    string    `json:"friend_name"`
-	FriendRemark  string    `json:"friend_remark"`
-	FriendAvatar  string    `json:"friend_avatar"`
+	FriendID      string    `json:"friend_id,omitempty"`
+	FriendName    string    `json:"friend_name,omitempty"`
+	FriendRemark  string    `json:"friend_remark,omitempty"`
+	FriendAvatar  string    `json:"friend_avatar,omitempty"`
+	GroupID       string    `json:"group_id,omitempty"`
+	GroupName     string    `json:"group_name,omitempty"`
+	GroupAvatar   string    `json:"group_avatar,omitempty"`
+	IsGroup       bool      `json:"is_group"`
 	LastMessage   string    `json:"last_message"`
 	LastMsgTime   time.Time `json:"last_msg_time"`
 	UnreadCount   int64     `json:"unread_count"`

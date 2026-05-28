@@ -27,3 +27,6 @@ dist-ssr
 .env
 brandybackend/.env
 
+# Go build output
+brandybackend/brandybackend.exe
+

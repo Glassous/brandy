@@ -42,8 +42,10 @@ export function ChatList({
 
   // Sort pinned chats first, then sort by last message time
   const sorted = [...chats].sort((a, b) => {
-    const aPinned = pinnedChats.includes(a.friend_id);
-    const bPinned = pinnedChats.includes(b.friend_id);
+    const aId = a.is_group ? a.group_id! : a.friend_id!;
+    const bId = b.is_group ? b.group_id! : b.friend_id!;
+    const aPinned = pinnedChats.includes(aId);
+    const bPinned = pinnedChats.includes(bId);
     if (aPinned && !bPinned) return -1;
     if (!aPinned && bPinned) return 1;
     return new Date(b.last_msg_time).getTime() - new Date(a.last_msg_time).getTime();
@@ -94,6 +96,7 @@ export function ChatList({
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+          color: var(--text);
         }
         .chat-time {
           font-size: 11px;
@@ -158,18 +161,20 @@ export function ChatList({
           <div className="empty">暂无聊天</div>
         ) : (
           sorted.map(chat => {
-            const isPinned = pinnedChats.includes(chat.friend_id);
-            const displayName = remarks[chat.friend_id] || chat.friend_name;
+            const id = chat.is_group ? chat.group_id! : chat.friend_id!;
+            const isPinned = pinnedChats.includes(id);
+            const displayName = chat.is_group ? chat.group_name! : (remarks[chat.friend_id!] || chat.friend_name!);
+            const displayAvatar = chat.is_group ? chat.group_avatar : chat.friend_avatar;
             return (
               <div
-                key={chat.friend_id}
-                className={`chat-item ${activeFriendId === chat.friend_id ? 'active' : ''} ${isPinned ? 'pinned' : ''}`}
+                key={id}
+                className={`chat-item ${activeFriendId === id ? 'active' : ''} ${isPinned ? 'pinned' : ''}`}
                 onClick={() => {
-                  onSelectFriend(chat.friend_id);
+                  onSelectFriend(id);
                 }}
-                onContextMenu={(e) => handleContextMenu(e, chat.friend_id)}
+                onContextMenu={(e) => handleContextMenu(e, id)}
               >
-                <Avatar name={displayName} url={chat.friend_avatar} size={40} />
+                <Avatar name={displayName} url={displayAvatar} size={40} />
                 <div className="chat-info">
                   <div className="chat-info-top">
                     <span className="chat-name">{displayName}</span>
