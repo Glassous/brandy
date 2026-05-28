@@ -18,6 +18,29 @@ function formatTime(ts: string) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+function formatLastMessage(msg: string) {
+  if (!msg) return '—';
+  if (msg.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(msg);
+      if (parsed) {
+        if (parsed.type === 'chat_file') {
+          switch (parsed.file_type) {
+            case 'image': return '[图片]';
+            case 'video': return '[视频]';
+            case 'audio': return '[音频]';
+            default: return '[文件]';
+          }
+        }
+        if (parsed.type === 'file_share') {
+          return '[文件]';
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  return msg;
+}
+
 export function ChatList({
   chats,
   remarks,
@@ -181,7 +204,7 @@ export function ChatList({
                     <span className="chat-time">{formatTime(chat.last_msg_time)}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span className="chat-preview">{chat.last_message || '—'}</span>
+                    <span className="chat-preview">{formatLastMessage(chat.last_message)}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       {isPinned && <span style={{ fontSize: 12, color: 'var(--brand-yellow)', marginRight: 2 }} title="已置顶">📌</span>}
                       {chat.unread_count > 0 && <span className="chat-badge">{chat.unread_count}</span>}

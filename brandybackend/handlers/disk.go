@@ -863,3 +863,211 @@ func TransferDiskFile(c *gin.Context) {
 
 	c.JSON(http.StatusOK, newItem)
 }
+
+// Helper to get or recursively create a folder path and return its ID
+func getOrCreateFolderByPath(ctx context.Context, userID primitive.ObjectID, pathStr string) (*primitive.ObjectID, error) {
+	pathStr = strings.TrimSpace(pathStr)
+	if pathStr == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(pathStr, "/")
+	var currentParent *primitive.ObjectID = nil
+	collection := db.MongoDB.Collection("disk_items")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		filter := bson.M{
+			"user_id":   userID,
+			"name":      part,
+			"type":      "folder",
+		}
+		if currentParent == nil {
+			filter["parent_id"] = nil
+		} else {
+			filter["parent_id"] = *currentParent
+		}
+
+		var existingFolder models.DiskItem
+		err := collection.FindOne(ctx, filter).Decode(&existingFolder)
+		if err == mongo.ErrNoDocuments {
+			// Create it
+			newFolder := models.DiskItem{
+				ID:        primitive.NewObjectID(),
+				UserID:    userID,
+				ParentID:  currentParent,
+				Name:      part,
+				Type:      "folder",
+				Size:      0,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			_, err = collection.InsertOne(ctx, newFolder)
+			if err != nil {
+				return nil, err
+			}
+			currentParent = &newFolder.ID
+		} else if err != nil {
+			return nil, err
+		} else {
+			currentParent = &existingFolder.ID
+		}
+	}
+
+	return currentParent, nil
+}
+
+type SaveChatFileReq struct {
+	Filename string `json:"filename" binding:"required"`
+	Size     int64  `json:"size" binding:"required"`
+	CosKey   string `json:"cos_key" binding:"required"`
+}
+
+func SaveChatFileToDisk(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	var req SaveChatFileReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 1. Verify cosKey starts with "chat/" to prevent directory traversal
+	if !strings.HasPrefix(req.CosKey, "chat/") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Invalid COS Key path"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// 2. Validate current user's space usage
+	usedSpace, err := calculateUsedSpace(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify usage space"})
+		return
+	}
+
+	if usedSpace+req.Size > DiskLimit {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "您的云盘空间不足（限额200MB）"})
+		return
+	}
+
+	// 3. Check if user already transferred it to avoid duplicates
+	var duplicate models.DiskItem
+	err = db.MongoDB.Collection("disk_items").FindOne(ctx, bson.M{
+		"user_id":        userID,
+		"source_cos_key": req.CosKey,
+	}).Decode(&duplicate)
+	if err == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "您已经转存过此文件"})
+		return
+	}
+
+	// 4. Query user setting for custom transfer path, default is "聊天记录转存"
+	var user models.User
+	err = db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch user settings"})
+		return
+	}
+
+	transferPath := strings.TrimSpace(user.CustomTransferPath)
+	if transferPath == "" {
+		transferPath = "聊天记录转存"
+	}
+
+	// 5. Get or create folder
+	parentFolderID, err := getOrCreateFolderByPath(ctx, userID, transferPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create transfer folder: " + err.Error()})
+		return
+	}
+
+	// 6. Perform COS Object Copy
+	client, bucket, region, customDomain, err := getCOSClient()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
+		return
+	}
+
+	ext := ""
+	if idx := strings.LastIndex(req.Filename, "."); idx != -1 {
+		ext = strings.ToLower(req.Filename[idx:])
+	}
+	uuidStr := uuid.New().String()
+	destKey := fmt.Sprintf("disk/%s/%s%s", userID.Hex(), uuidStr, ext)
+
+	// Format Source URL: <bucket>.cos.<region>.myqcloud.com/<source-key>
+	sourceURL := fmt.Sprintf("%s.cos.%s.myqcloud.com/%s", bucket, region, req.CosKey)
+
+	_, _, err = client.Object.Copy(ctx, destKey, sourceURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tencent COS Copy failed: " + err.Error()})
+		return
+	}
+
+	domain := strings.TrimRight(customDomain, "/")
+	if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
+		domain = "https://" + domain
+	}
+	fileURL := fmt.Sprintf("%s/%s", domain, destKey)
+
+	// 7. Create new DiskItem record
+	newItem := models.DiskItem{
+		ID:           primitive.NewObjectID(),
+		UserID:       userID,
+		ParentID:     parentFolderID,
+		Name:         req.Filename,
+		Type:         "file",
+		Size:         req.Size,
+		CosKey:       destKey,
+		SourceCosKey: req.CosKey,
+		URL:          fileURL,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+
+	_, err = db.MongoDB.Collection("disk_items").InsertOne(ctx, newItem)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save transferred file metadata"})
+		return
+	}
+
+	c.JSON(http.StatusOK, newItem)
+}
+
+func CheckChatTransferStatus(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	cosKey := c.Query("cos_key")
+	if cosKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing cos_key parameter"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var existing models.DiskItem
+	err := db.MongoDB.Collection("disk_items").FindOne(ctx, bson.M{
+		"user_id":        userID,
+		"source_cos_key": cosKey,
+	}).Decode(&existing)
+
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusOK, gin.H{"transferred": false})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"transferred": true})
+}

@@ -105,6 +105,11 @@ func main() {
 		api.POST("/disk/share/friend", handlers.ShareToFriend)
 		api.GET("/disk/check-transfer/:origin_id", handlers.CheckTransferStatus)
 		api.POST("/disk/transfer", handlers.TransferDiskFile)
+		api.POST("/disk/save-chat-file", handlers.SaveChatFileToDisk)
+		api.GET("/disk/check-chat-transfer", handlers.CheckChatTransferStatus)
+
+		// Chat Routes
+		api.POST("/chat/upload-credential", handlers.GetChatUploadCredential)
 	}
 
 	// WebSocket endpoint

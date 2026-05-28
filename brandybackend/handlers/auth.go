@@ -56,7 +56,8 @@ type ChangePasswordReq struct {
 }
 
 type UpdateProfileReq struct {
-	Nickname string `json:"nickname" binding:"required,min=2,max=20"`
+	Nickname           string `json:"nickname" binding:"required,min=2,max=20"`
+	CustomTransferPath string `json:"custom_transfer_path"`
 }
 
 func generateCode() string {
@@ -215,11 +216,12 @@ func Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"token": token,
 		"user": models.UserResponse{
-			ID:        newUser.ID.Hex(),
-			Username:  newUser.Username,
-			Nickname:  newUser.Nickname,
-			Avatar:    newUser.Avatar,
-			CreatedAt: newUser.CreatedAt,
+			ID:                 newUser.ID.Hex(),
+			Username:           newUser.Username,
+			Nickname:           newUser.Nickname,
+			Avatar:             newUser.Avatar,
+			CustomTransferPath: newUser.CustomTransferPath,
+			CreatedAt:          newUser.CreatedAt,
 		},
 	})
 }
@@ -267,11 +269,12 @@ func Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": models.UserResponse{
-			ID:        user.ID.Hex(),
-			Username:  user.Username,
-			Nickname:  user.Nickname,
-			Avatar:    user.Avatar,
-			CreatedAt: user.CreatedAt,
+			ID:                 user.ID.Hex(),
+			Username:           user.Username,
+			Nickname:           user.Nickname,
+			Avatar:             user.Avatar,
+			CustomTransferPath: user.CustomTransferPath,
+			CreatedAt:          user.CreatedAt,
 		},
 	})
 }
@@ -318,11 +321,12 @@ func LoginWithCode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": models.UserResponse{
-			ID:        user.ID.Hex(),
-			Username:  user.Username,
-			Nickname:  user.Nickname,
-			Avatar:    user.Avatar,
-			CreatedAt: user.CreatedAt,
+			ID:                 user.ID.Hex(),
+			Username:           user.Username,
+			Nickname:           user.Nickname,
+			Avatar:             user.Avatar,
+			CustomTransferPath: user.CustomTransferPath,
+			CreatedAt:          user.CreatedAt,
 		},
 	})
 }
@@ -446,11 +450,12 @@ func GetProfile(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.UserResponse{
-		ID:        user.ID.Hex(),
-		Username:  user.Username,
-		Nickname:  user.Nickname,
-		Avatar:    user.Avatar,
-		CreatedAt: user.CreatedAt,
+		ID:                 user.ID.Hex(),
+		Username:           user.Username,
+		Nickname:           user.Nickname,
+		Avatar:             user.Avatar,
+		CustomTransferPath: user.CustomTransferPath,
+		CreatedAt:          user.CreatedAt,
 	})
 }
 
@@ -472,7 +477,12 @@ func UpdateProfile(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = collection.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": bson.M{"nickname": strings.TrimSpace(req.Nickname)}})
+	updateFields := bson.M{
+		"nickname":             strings.TrimSpace(req.Nickname),
+		"custom_transfer_path": strings.TrimSpace(req.CustomTransferPath),
+	}
+
+	_, err = collection.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": updateFields})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile"})
 		return

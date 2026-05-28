@@ -8,6 +8,7 @@ export interface User {
   username: string;
   nickname: string;
   avatar?: string;
+  custom_transfer_path?: string;
 }
 
 export interface Message {
@@ -67,6 +68,7 @@ interface AppCtx {
   handleFriendRequest: (requestId: string, status: 'accepted' | 'rejected') => Promise<void>;
   deleteFriend: (friendId: string) => Promise<void>;
   updateNickname: (newNickname: string) => Promise<boolean>;
+  updateCustomTransferPath: (path: string) => Promise<boolean>;
   uploadAvatar: (file: File) => Promise<string | null>;
   startChat: (friendId: string, friendName: string, isGroup?: boolean) => void;
   fetchChats: () => Promise<void>;
@@ -401,7 +403,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`${API_BASE}/api/user/profile`, {
         method: 'PUT',
         headers: getHeaders,
-        body: JSON.stringify({ nickname: newNickname }),
+        body: JSON.stringify({ nickname: newNickname, custom_transfer_path: user.custom_transfer_path || '' }),
       });
       if (!res.ok) { showToast((await res.json()).error || '修改失败', 'error'); return false; }
       const u = { ...user, nickname: newNickname };
@@ -411,6 +413,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return true;
     } catch { showToast('网络错误', 'error'); return false; }
   }, [token, user, getHeaders, fetchChats, showToast]);
+
+  const updateCustomTransferPath = useCallback(async (path: string): Promise<boolean> => {
+    if (!token || !user) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/user/profile`, {
+        method: 'PUT',
+        headers: getHeaders,
+        body: JSON.stringify({ nickname: user.nickname, custom_transfer_path: path.trim() }),
+      });
+      if (!res.ok) { showToast((await res.json()).error || '修改失败', 'error'); return false; }
+      const u = { ...user, custom_transfer_path: path.trim() };
+      setUser(u);
+      localStorage.setItem('user', JSON.stringify(u));
+      return true;
+    } catch { showToast('网络错误', 'error'); return false; }
+  }, [token, user, getHeaders, showToast]);
 
   const uploadAvatar = useCallback(async (file: File): Promise<string | null> => {
     if (!token || !user) return null;
@@ -832,7 +850,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       token, user, chats, friends, friendRequests, messages,
       activeChatFriendId, setActiveChatFriendId,
       login, logout, sendMessage, loadChatMessages,
-      addFriend, handleFriendRequest, deleteFriend, updateNickname, startChat,
+      addFriend, handleFriendRequest, deleteFriend, updateNickname, updateCustomTransferPath, startChat,
       fetchChats, fetchFriends, fetchFriendRequests,
       hiddenChats, remarks, pinnedChats, hideChat, updateRemark, togglePinChat,
       uploadAvatar,

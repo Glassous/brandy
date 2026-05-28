@@ -18,8 +18,9 @@ const EyeOffIcon = () => (
 );
 
 export function AccountSettingsPage() {
-  const { user, token, updateNickname, logout, uploadAvatar, deleteAllLocalChatHistories } = useApp();
+  const { user, token, updateNickname, updateCustomTransferPath, logout, uploadAvatar, deleteAllLocalChatHistories } = useApp();
   const [nick, setNick] = useState(user?.nickname || '');
+  const [customPath, setCustomPath] = useState(user?.custom_transfer_path || '');
   const [saving, setSaving] = useState(false);
 
   const [oldPwd, setOldPwd] = useState('');
@@ -38,11 +39,19 @@ export function AccountSettingsPage() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  const handleNick = async (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nick.trim() || nick.trim() === user?.nickname) return;
+    const cleanNick = nick.trim();
+    const cleanPath = customPath.trim();
+    if (!cleanNick) return;
     setSaving(true);
-    await updateNickname(nick.trim());
+    let success = true;
+    if (cleanNick !== user?.nickname) {
+      success = await updateNickname(cleanNick);
+    }
+    if (success && cleanPath !== (user?.custom_transfer_path || '')) {
+      await updateCustomTransferPath(cleanPath);
+    }
     setSaving(false);
   };
 
@@ -150,12 +159,16 @@ export function AccountSettingsPage() {
         </div>
         <div className="pf-section">
           <div className="pf-section-title">个人资料</div>
-          <form onSubmit={handleNick} className="pf-form">
+          <form onSubmit={handleSaveProfile} className="pf-form">
             <div className="pf-row">
               <label>昵称</label>
               <input value={nick} onChange={e => setNick(e.target.value)} disabled={saving} />
             </div>
-            <button type="submit" className="btn btn-round" disabled={saving || !nick.trim() || nick.trim() === user?.nickname}>
+            <div className="pf-row">
+              <label>聊天转存文件夹 (默认：聊天记录转存)</label>
+              <input placeholder="例如：我的文件/聊天收集" value={customPath} onChange={e => setCustomPath(e.target.value)} disabled={saving} />
+            </div>
+            <button type="submit" className="btn btn-round" disabled={saving || !nick.trim() || (nick.trim() === user?.nickname && customPath.trim() === (user?.custom_transfer_path || ''))}>
               {saving ? '保存中...' : '保存修改'}
             </button>
           </form>

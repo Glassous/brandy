@@ -13,6 +13,7 @@ type User struct {
 	Nickname           string             `bson:"nickname" json:"nickname"`
 	Avatar             string             `bson:"avatar" json:"avatar"`
 	Email              string             `bson:"email" json:"email"`
+	CustomTransferPath string             `bson:"custom_transfer_path" json:"custom_transfer_path"`
 	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
 }
 
@@ -53,11 +54,12 @@ type Group struct {
 
 // REST request/response shapes helper
 type UserResponse struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	Nickname  string    `json:"nickname"`
-	Avatar    string    `json:"avatar"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	Username           string    `json:"username"`
+	Nickname           string    `json:"nickname"`
+	Avatar             string    `json:"avatar"`
+	CustomTransferPath string    `json:"custom_transfer_path"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type GroupResponse struct {
@@ -101,6 +103,7 @@ type DiskItem struct {
 	Type         string              `bson:"type" json:"type"`
 	Size         int64               `bson:"size,omitempty" json:"size"`
 	CosKey       string              `bson:"cos_key,omitempty" json:"cos_key"`
+	SourceCosKey string              `bson:"source_cos_key,omitempty" json:"source_cos_key"`
 	URL          string              `bson:"url,omitempty" json:"url"`
 	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`
