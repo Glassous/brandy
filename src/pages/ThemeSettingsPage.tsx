@@ -1,5 +1,6 @@
 import { useTheme } from '../contexts/ThemeContext';
 import { Link } from 'react-router-dom';
+import { SunIcon, MoonIcon, MonitorIcon, CheckIcon } from '../components/shared/Icons';
 
 export function ThemeSettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -86,7 +87,7 @@ export function ThemeSettingsPage() {
           transform: scale(0.97);
         }
         .tm-card.active {
-          border-color: var(--text);
+          border-color: var(--brand-blue);
           background: var(--hover);
         }
         .tm-preview-box {
@@ -99,13 +100,13 @@ export function ThemeSettingsPage() {
           box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
         .tm-preview-light {
-          background: #F9F6F0;
+          background: #f4f4f5;
         }
         .tm-preview-dark {
-          background: #1B1915;
+          background: #0e1621;
         }
         .tm-preview-system {
-          background: linear-gradient(135deg, #F9F6F0 50%, #1B1915 50%);
+          background: linear-gradient(135deg, #f4f4f5 50%, #0e1621 50%);
         }
         .tm-preview-inner {
           position: absolute;
@@ -123,17 +124,17 @@ export function ThemeSettingsPage() {
           width: 80%;
         }
         .tm-preview-light .tm-preview-line {
-          background: #E5DFD0;
+          background: #d9d9d9;
         }
         .tm-preview-dark .tm-preview-line {
-          background: #3D372C;
+          background: #2b5278;
         }
         .tm-preview-light .tm-preview-line.short {
-          background: #D4B87A;
+          background: #3390ec;
           width: 40%;
         }
         .tm-preview-dark .tm-preview-line.short {
-          background: #E5C68A;
+          background: #5288c1;
           width: 40%;
         }
         .tm-card-label {
@@ -177,12 +178,11 @@ export function ThemeSettingsPage() {
               </div>
             </div>
             <span className="tm-card-label">
+              <SunIcon size={16} />
               浅色模式
               {theme === 'light' && (
                 <span className="tm-check-icon">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+                  <CheckIcon size={15} />
                 </span>
               )}
             </span>
@@ -201,12 +201,11 @@ export function ThemeSettingsPage() {
               </div>
             </div>
             <span className="tm-card-label">
+              <MoonIcon size={16} />
               深色模式
               {theme === 'dark' && (
                 <span className="tm-check-icon">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+                  <CheckIcon size={15} />
                 </span>
               )}
             </span>
@@ -228,12 +227,11 @@ export function ThemeSettingsPage() {
               </div>
             </div>
             <span className="tm-card-label">
+              <MonitorIcon size={16} />
               跟随系统
               {theme === 'system' && (
                 <span className="tm-check-icon">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+                  <CheckIcon size={15} />
                 </span>
               )}
             </span>

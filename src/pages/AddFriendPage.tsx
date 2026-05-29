@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { Link } from 'react-router-dom';
 import { Avatar } from '../components/shared/Avatar';
+import { BackIcon } from '../components/shared/Icons';
 import { API_BASE } from '../config';
 
 export function AddFriendPage() {
@@ -147,12 +148,12 @@ export function AddFriendPage() {
           cursor: not-allowed;
         }
         
-        /* 404 & Warning banner */
+        /* Warning banner */
         .af-error-banner {
           width: 100%;
           max-width: 360px;
-          background: rgba(232, 122, 94, 0.08);
-          border: 1px solid rgba(232, 122, 94, 0.2);
+          background: rgba(220, 53, 69, 0.06);
+          border: 1px solid rgba(220, 53, 69, 0.20);
           padding: 16px;
           border-radius: 16px;
           display: flex;
@@ -160,14 +161,27 @@ export function AddFriendPage() {
           gap: 12px;
           animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
+        [data-theme="dark"] .af-error-banner {
+          background: rgba(255, 107, 107, 0.08);
+          border-color: rgba(255, 107, 107, 0.25);
+        }
         .af-error-icon {
-          font-size: 20px;
-          line-height: 1;
+          display: flex;
+          align-items: flex-start;
+          color: #dc3545;
+          flex-shrink: 0;
+          padding-top: 1px;
+        }
+        [data-theme="dark"] .af-error-icon {
+          color: #ff6b6b;
         }
         .af-error-text {
           font-size: 13px;
-          color: var(--badge-unread);
+          color: #dc3545;
           line-height: 1.4;
+        }
+        [data-theme="dark"] .af-error-text {
+          color: #ff6b6b;
         }
 
         /* Profile preview card */
@@ -232,10 +246,7 @@ export function AddFriendPage() {
       {/* Header */}
       <div className="af-header">
         <Link to="/contacts" className="af-back-btn" title="返回联系人">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="19" y1="12" x2="5" y2="12" />
-            <polyline points="12 19 5 12 12 5" />
-          </svg>
+          <BackIcon size={20} />
         </Link>
         <span className="af-header-title">添加好友</span>
       </div>
@@ -264,7 +275,13 @@ export function AddFriendPage() {
         {/* Enhanced Error Banner */}
         {searchError && (
           <div className="af-error-banner">
-            <span className="af-error-icon">⚠️</span>
+            <span className="af-error-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </span>
             <div className="af-error-text">{searchError}</div>
           </div>
         )}

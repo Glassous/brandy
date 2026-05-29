@@ -867,7 +867,8 @@ export function DiskPage() {
         }
 
         .item-row.selected {
-          background-color: var(--hover-light, rgba(0, 122, 255, 0.05));
+          background-color: var(--hover);
+          border-left: 2px solid var(--brand-blue);
         }
 
         .item-name-col {
@@ -1011,7 +1012,9 @@ export function DiskPage() {
         }
 
         .form-select:focus {
-          border-color: var(--text);
+          border-color: var(--brand-blue);
+          box-shadow: 0 0 0 2px rgba(51, 144, 236, 0.15);
+          outline: none;
         }
 
         .item-name-details {

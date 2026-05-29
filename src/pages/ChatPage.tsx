@@ -3,6 +3,7 @@ import { useApp, type ChatSession } from '../contexts/AppContext';
 import { ChatList } from '../components/Chat/ChatList';
 import { ChatRoom } from '../components/Chat/ChatRoom';
 import { Avatar } from '../components/shared/Avatar';
+import { CloseIcon } from '../components/shared/Icons';
 
 export function ChatPage() {
   const {
@@ -380,7 +381,7 @@ export function ChatPage() {
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">发起群聊</span>
-              <button className="modal-close-btn" onClick={() => setShowCreateGroupModal(false)}>×</button>
+              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowCreateGroupModal(false)}><CloseIcon size={20} /></button>
             </div>
             <form onSubmit={handleCreateGroupSubmit}>
               <div className="modal-body">

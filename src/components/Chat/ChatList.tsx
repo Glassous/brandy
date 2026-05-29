@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Avatar } from '../shared/Avatar';
 import type { ChatSession } from '../../contexts/AppContext';
+import { PinIcon, CloseIcon } from '../shared/Icons';
 
 interface ChatListProps {
   chats: ChatSession[];
@@ -222,7 +223,7 @@ export function ChatList({
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="chat-preview">{formatLastMessage(chat.last_message)}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      {isPinned && <span style={{ fontSize: 12, color: 'var(--brand-yellow)', marginRight: 2 }} title="已置顶">📌</span>}
+                      {isPinned && <PinIcon size={12} style={{ color: 'var(--brand-yellow)', marginRight: 2 }} aria-label="已置顶" />}
                       {chat.unread_count > 0 && <span className="chat-badge">{chat.unread_count}</span>}
                     </div>
                   </div>
@@ -245,7 +246,10 @@ export function ChatList({
               setContextMenu(null);
             }}
           >
-            📌 {pinnedChats.includes(contextMenu.friendId) ? '取消置顶' : '置顶对话'}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <PinIcon size={14} color="var(--text)" />
+              {pinnedChats.includes(contextMenu.friendId) ? '取消置顶' : '置顶对话'}
+            </span>
           </button>
           <button
             className="context-menu-item"
@@ -254,7 +258,10 @@ export function ChatList({
               setContextMenu(null);
             }}
           >
-            × 不在主页显示该对话
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: 'var(--badge-unread)' }}>
+              <CloseIcon size={14} color="var(--badge-unread)" />
+              不在主页显示该对话
+            </span>
           </button>
         </div>
       )}

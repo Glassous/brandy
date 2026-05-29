@@ -117,9 +117,10 @@ export function AccountSettingsPage() {
         .pf-name { font-size:18px;font-weight:700; }
         .pf-username { font-size:12px;color:var(--text-dim); }
         .pf-form { display:flex;flex-direction:column;gap:12px; }
-        .pf-pwd-error { padding:9px 12px;background:rgba(232,122,94,0.08);border:1px solid rgba(232,122,94,0.25);border-radius:10px;font-size:13px;color:var(--badge-unread);animation:errorShake 0.4s ease; }
-        .pf-pwd-success { padding:9px 12px;background:rgba(44,95,138,0.07);border:1px solid rgba(44,95,138,0.2);border-radius:10px;font-size:13px;color:var(--brand-blue); }
-        [data-theme="dark"] .pf-pwd-success { border-color:rgba(74,129,173,0.3);color:var(--brand-yellow); }
+        .pf-pwd-error { padding:9px 12px;background:rgba(220,53,69,0.08);border:1px solid rgba(220,53,69,0.25);border-radius:10px;font-size:13px;color:#dc3545;animation:errorShake 0.4s ease; }
+        [data-theme="dark"] .pf-pwd-error { color:#ff6b6b;background:rgba(255,107,107,0.08);border-color:rgba(255,107,107,0.25); }
+        .pf-pwd-success { padding:9px 12px;background:rgba(51,144,236,0.08);border:1px solid rgba(51,144,236,0.25);border-radius:10px;font-size:13px;color:var(--brand-blue); }
+        [data-theme="dark"] .pf-pwd-success { color:#7db8e8;background:rgba(82,136,193,0.10);border-color:rgba(82,136,193,0.30); }
         .pf-logout { padding:24px 16px;margin-top:4px; }
         .btn-round { border-radius:24px;padding:12px 20px; }
         .pf-pwd-field { position:relative; }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../shared/Avatar';
+import { CloseIcon, BackIcon, InviteIcon, MuteIcon, UnmuteIcon, AdminIcon, KickIcon, BotIcon } from '../shared/Icons';
 import { useApp, type Message } from '../../contexts/AppContext';
 import { useToast } from '../shared/Toast';
 import { API_BASE } from '../../config';
@@ -411,14 +412,15 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
                   background: 'none',
                   border: 'none',
                   color: '#ffffff',
-                  fontSize: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   cursor: 'pointer',
-                  fontWeight: 'bold',
                   outline: 'none'
                 }}
                 title="关闭"
               >
-                ×
+                <CloseIcon size={28} color="#ffffff" />
               </button>
               <img src={data.url} alt={data.file_name} style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '4px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)', display: 'block' }} />
               <div style={{ position: 'absolute', bottom: '-40px', left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: '20px', color: '#fff', fontSize: '13px' }}>
@@ -485,14 +487,15 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
                   background: 'none',
                   border: 'none',
                   color: '#ffffff',
-                  fontSize: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   cursor: 'pointer',
-                  fontWeight: 'bold',
                   outline: 'none'
                 }}
                 title="关闭"
               >
-                ×
+                <CloseIcon size={28} color="#ffffff" />
               </button>
               <video
                 src={data.url}
@@ -522,7 +525,7 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
             <div className="modal-card" style={{ width: '360px' }} onClick={e => e.stopPropagation()}>
               <div className="modal-header">
                 <span className="modal-title">音频详情</span>
-                <button className="modal-close-btn" onClick={() => setShowModal(false)}>×</button>
+                <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowModal(false)}><CloseIcon size={20} /></button>
               </div>
               <div className="modal-body" style={{ textAlign: 'center', padding: '24px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
                 <div style={{ color: 'var(--brand-blue)', marginBottom: '8px' }}>
@@ -579,7 +582,7 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
           <div className="modal-card" style={{ width: '360px' }}>
             <div className="modal-header">
               <span className="modal-title">文件详情</span>
-              <button className="modal-close-btn" onClick={() => setShowModal(false)}>×</button>
+              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowModal(false)}><CloseIcon size={20} /></button>
             </div>
             <div className="modal-body" style={{ textAlign: 'center', padding: '24px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
               <div style={{ color: 'var(--brand-blue)', marginBottom: '8px' }}>
@@ -1971,7 +1974,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                     >
                       {member.isAI ? (
-                        <span style={{ fontSize: '20px' }}>🤖</span>
+                        <span style={{ display: 'flex', alignItems: 'center', color: 'var(--brand-blue)' }}><BotIcon size={22} /></span>
                       ) : (
                         <Avatar name={member.name} url={member.avatar} size={28} />
                       )}
@@ -2053,13 +2056,14 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                     border: 'none',
                     color: 'var(--text-dim)',
                     cursor: 'pointer',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     padding: '0 4px',
                     flexShrink: 0
                   }}
                 >
-                  ×
+                  <CloseIcon size={16} />
                 </button>
               </div>
             )}
@@ -2133,6 +2137,19 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       {/* Group Settings Sidebar */}
       {isGroup && showGroupSettings && groupDetail && (
         <div className="cr-settings-sidebar">
+          {/* Settings Header with Back Button */}
+          <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0, gap: 8 }}>
+            <button
+              onClick={() => setShowGroupSettings(false)}
+              title="关闭群设置"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: '4px', display: 'flex', alignItems: 'center', borderRadius: '50%', transition: 'background 0.2s' }}
+              onMouseOver={e => (e.currentTarget.style.background = 'var(--hover)')}
+              onMouseOut={e => (e.currentTarget.style.background = 'none')}
+            >
+              <BackIcon size={20} />
+            </button>
+            <span style={{ fontWeight: 700, fontSize: 15, flex: 1 }}>群设置</span>
+          </div>
           <div className="cr-settings-section" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
             <Avatar name={chatName || '群聊'} url={chatAvatar} size={64} fontSize={24} />
             <div className="cr-settings-group-name" style={{ marginTop: 8, fontWeight: 700, fontSize: 16 }}>
@@ -2217,9 +2234,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   setSelectedInviteFriends([]);
                   setShowInviteModal(true);
                 }}
-                style={{ color: 'var(--brand-blue)', fontSize: 14 }}
+                style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}
               >
-                ➕
+                <InviteIcon size={15} />
               </button>
             </div>
             <div className="cr-settings-member-list">
@@ -2250,9 +2267,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           className="member-action-btn"
                           title={isMuted ? "解除禁言" : "禁言"}
                           onClick={() => handleToggleMute(member.id, isMuted)}
-                          style={{ fontSize: 12, color: isMuted ? 'var(--brand-yellow)' : 'var(--text-dim)' }}
+                          style={{ display: 'flex', alignItems: 'center', color: isMuted ? 'var(--brand-yellow)' : 'var(--text-dim)' }}
                         >
-                          {isMuted ? "🔊" : "🔇"}
+                          {isMuted ? <UnmuteIcon size={15} /> : <MuteIcon size={15} />}
                         </button>
                       )}
                       {canSetAdmin && (
@@ -2260,9 +2277,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           className="member-action-btn"
                           title={isAdmin ? "取消管理员" : "设为管理员"}
                           onClick={() => handleToggleAdmin(member.id, isAdmin)}
-                          style={{ fontSize: 11 }}
+                          style={{ display: 'flex', alignItems: 'center', color: isAdmin ? 'var(--brand-blue)' : 'var(--text-dim)' }}
                         >
-                          🛡️
+                          <AdminIcon size={15} />
                         </button>
                       )}
                       {canKick && !isMe && (
@@ -2270,9 +2287,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           className="member-action-btn danger"
                           title="移出群聊"
                           onClick={() => handleKickMember(member.id, member.nickname)}
-                          style={{ fontSize: 11 }}
+                          style={{ display: 'flex', alignItems: 'center' }}
                         >
-                          ❌
+                          <KickIcon size={14} />
                         </button>
                       )}
                     </div>
@@ -2294,9 +2311,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   setAIPersonality('');
                   setShowAddAIModal(true);
                 }}
-                style={{ color: 'var(--brand-blue)', fontSize: 14 }}
+                style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}
               >
-                ➕
+                <InviteIcon size={15} />
               </button>
             </div>
             <div className="cr-settings-member-list">
@@ -2308,7 +2325,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                 aiMembers.map(ai => (
                   <div key={ai.id} className="cr-settings-member-item">
                     <div className="member-info">
-                      <span style={{ fontSize: '20px' }}>🤖</span>
+                      <span style={{ display: 'flex', alignItems: 'center', color: 'var(--brand-blue)', flexShrink: 0 }}>
+                        <BotIcon size={22} />
+                      </span>
                       <span className="member-name">{ai.name}</span>
                       {ai.personality && (
                         <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginLeft: '4px' }}>
@@ -2321,9 +2340,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                         className="member-action-btn danger"
                         title="移除AI"
                         onClick={() => handleRemoveAI(ai.id)}
-                        style={{ fontSize: 11 }}
+                        style={{ display: 'flex', alignItems: 'center' }}
                       >
-                        ❌
+                        <KickIcon size={14} />
                       </button>
                     </div>
                   </div>
@@ -2365,7 +2384,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">邀请好友入群</span>
-              <button className="modal-close-btn" onClick={() => setShowInviteModal(false)}>×</button>
+              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowInviteModal(false)}><CloseIcon size={20} /></button>
             </div>
             <form onSubmit={handleInviteSubmit}>
               <div className="modal-body" style={{ maxHeight: '50vh' }}>
@@ -2421,7 +2440,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">转发消息</span>
-              <button className="modal-close-btn" onClick={() => setShowForwardModal(false)}>×</button>
+              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowForwardModal(false)}><CloseIcon size={20} /></button>
             </div>
             <div className="modal-body" style={{ maxHeight: '60vh' }}>
               <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 8 }}>
@@ -2522,7 +2541,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           <div className="modal-card" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <span className="modal-title">添加AI成员</span>
-              <button className="modal-close-btn" onClick={() => setShowAddAIModal(false)}>×</button>
+              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowAddAIModal(false)}><CloseIcon size={20} /></button>
             </div>
             <div className="modal-body">
               <div style={{ marginBottom: '12px' }}>

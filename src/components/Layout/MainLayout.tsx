@@ -17,9 +17,9 @@ export function MainLayout() {
     <div className="main-layout-container">
       <style>{`
         :root {
-          --rail-bg: var(--bg-paper);
-          --rail-active-pill: var(--brand-yellow);
-          --rail-active-text: #1A1A1A;
+          --rail-bg: var(--bg-card);
+          --rail-active-pill: rgba(51, 144, 236, 0.15);
+          --rail-active-text: var(--primary);
           --rail-inactive-text: var(--text-secondary);
           --rail-hover-pill: var(--hover);
           --rail-badge-bg: var(--badge-unread);
@@ -27,13 +27,13 @@ export function MainLayout() {
         }
 
         [data-theme="dark"] {
-          --rail-bg: var(--bg-paper);
-          --rail-active-pill: var(--brand-yellow);
-          --rail-active-text: #1B1915;
+          --rail-bg: var(--bg-card);
+          --rail-active-pill: rgba(82, 136, 193, 0.2);
+          --rail-active-text: var(--primary);
           --rail-inactive-text: var(--text-secondary);
           --rail-hover-pill: var(--hover);
           --rail-badge-bg: var(--badge-unread);
-          --rail-badge-text: #1B1915;
+          --rail-badge-text: #FFFFFF;
         }
 
         .main-layout-container {
