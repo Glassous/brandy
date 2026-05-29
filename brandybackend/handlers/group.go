@@ -651,21 +651,53 @@ func GetGroupMessages(c *gin.Context) {
 	}
 
 	type MessageResponse struct {
-		ID        string    `json:"id"`
-		SenderID  string    `json:"sender_id"`
-		GroupID   string    `json:"group_id,omitempty"`
-		Content   string    `json:"content"`
-		CreatedAt time.Time `json:"created_at"`
+		ID           string    `json:"id"`
+		SenderID     string    `json:"sender_id"`
+		GroupID      string    `json:"group_id,omitempty"`
+		Content      string    `json:"content"`
+		SenderName   string    `json:"sender_name,omitempty"`
+		SenderAvatar string    `json:"sender_avatar,omitempty"`
+		CreatedAt    time.Time `json:"created_at"`
 	}
+
+	// For compatibility/fallback, query users & AI members to populate missing names/avatars in history
+	userCache := make(map[primitive.ObjectID]models.User)
+	aiCache := make(map[primitive.ObjectID]models.AIMember)
 
 	response := make([]MessageResponse, 0)
 	for _, m := range dbMsgs {
+		sName := m.SenderName
+		sAvatar := m.SenderAvatar
+		if sName == "" {
+			ai, exists := aiCache[m.SenderID]
+			if !exists {
+				err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{"user_id": m.SenderID, "group_id": groupID}).Decode(&ai)
+				if err == nil {
+					aiCache[m.SenderID] = ai
+				}
+			}
+			if ai.Name != "" {
+				sName = ai.Name
+				sAvatar = ai.Avatar
+			} else {
+				u, exists := userCache[m.SenderID]
+				if !exists {
+					db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": m.SenderID}).Decode(&u)
+					userCache[m.SenderID] = u
+				}
+				sName = u.Nickname
+				sAvatar = u.Avatar
+			}
+		}
+
 		response = append(response, MessageResponse{
-			ID:        m.ID.Hex(),
-			SenderID:  m.SenderID.Hex(),
-			GroupID:   m.GroupID.Hex(),
-			Content:   m.Content,
-			CreatedAt: m.CreatedAt,
+			ID:           m.ID.Hex(),
+			SenderID:     m.SenderID.Hex(),
+			GroupID:      m.GroupID.Hex(),
+			Content:      m.Content,
+			SenderName:   sName,
+			SenderAvatar: sAvatar,
+			CreatedAt:    m.CreatedAt,
 		})
 	}
 

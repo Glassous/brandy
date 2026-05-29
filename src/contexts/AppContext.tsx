@@ -17,6 +17,8 @@ export interface Message {
   receiver_id?: string;
   group_id?: string;
   content: string;
+  sender_name?: string;
+  sender_avatar?: string;
   created_at: string;
 }
 
@@ -157,6 +159,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<number | null>(null);
   const localDbRef = useRef<LocalChatDB | null>(null);
+  const fetchChatsTimerRef = useRef<any>(null);
 
   // Manage IndexedDB connection based on logged-in user
   useEffect(() => {
@@ -190,6 +193,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (res.ok) setChats(await res.json());
     } catch { /* ignore */ }
   }, [token, getHeaders]);
+
+  const throttledFetchChats = useCallback(() => {
+    if (fetchChatsTimerRef.current) {
+      clearTimeout(fetchChatsTimerRef.current);
+    }
+    fetchChatsTimerRef.current = setTimeout(() => {
+      fetchChats();
+    }, 250);
+  }, [fetchChats]);
 
   const fetchFriends = useCallback(async () => {
     if (!token) return;
@@ -861,7 +873,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 setMessages(prev => prev.some(x => x.id === m.id) ? prev : [...prev, m]);
               }
             }
-            fetchChats();
+            throttledFetchChats();
           }
         } catch { /* ignore */ }
       };
@@ -880,6 +892,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       wsRef.current?.close();
       wsRef.current = null;
       if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; }
+      if (fetchChatsTimerRef.current) { clearTimeout(fetchChatsTimerRef.current); fetchChatsTimerRef.current = null; }
     };
   }, [token, fetchChats]);
 

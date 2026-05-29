@@ -83,12 +83,14 @@ type RawMessagePayload struct {
 }
 
 type MessageEventData struct {
-	ID         string    `json:"id"`
-	SenderID   string    `json:"sender_id"`
-	ReceiverID string    `json:"receiver_id,omitempty"`
-	GroupID    string    `json:"group_id,omitempty"`
-	Content    string    `json:"content"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	SenderID     string    `json:"sender_id"`
+	ReceiverID   string    `json:"receiver_id,omitempty"`
+	GroupID      string    `json:"group_id,omitempty"`
+	Content      string    `json:"content"`
+	SenderName   string    `json:"sender_name,omitempty"`
+	SenderAvatar string    `json:"sender_avatar,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // HandleWS upgrades HTTP connection and registers the user
@@ -235,14 +237,19 @@ func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
 		return
 	}
 
+	var sender models.User
+	db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": senderID}).Decode(&sender)
+
 	// Save to DB
 	msg := models.Message{
-		ID:         primitive.NewObjectID(),
-		SenderID:   senderID,
-		ReceiverID: receiverID,
-		Content:    content,
-		IsRead:     false,
-		CreatedAt:  time.Now(),
+		ID:           primitive.NewObjectID(),
+		SenderID:     senderID,
+		ReceiverID:   receiverID,
+		Content:      content,
+		IsRead:       false,
+		SenderName:   sender.Nickname,
+		SenderAvatar: sender.Avatar,
+		CreatedAt:    time.Now(),
 	}
 
 	_, err = db.MongoDB.Collection("messages").InsertOne(ctx, msg)
@@ -252,11 +259,13 @@ func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
 	}
 
 	eventData := MessageEventData{
-		ID:         msg.ID.Hex(),
-		SenderID:   senderIDStr,
-		ReceiverID: receiverIDStr,
-		Content:    content,
-		CreatedAt:  msg.CreatedAt,
+		ID:           msg.ID.Hex(),
+		SenderID:     senderIDStr,
+		ReceiverID:   receiverIDStr,
+		Content:      content,
+		SenderName:   sender.Nickname,
+		SenderAvatar: sender.Avatar,
+		CreatedAt:    msg.CreatedAt,
 	}
 
 	wsMsg := WSMessage{
@@ -288,14 +297,19 @@ func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
 		return
 	}
 
+	var sender models.User
+	db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": senderID}).Decode(&sender)
+
 	// Save to MongoDB
 	msg := models.Message{
-		ID:        primitive.NewObjectID(),
-		SenderID:  senderID,
-		GroupID:   groupID,
-		Content:   content,
-		IsRead:    false,
-		CreatedAt: time.Now(),
+		ID:           primitive.NewObjectID(),
+		SenderID:     senderID,
+		GroupID:      groupID,
+		Content:      content,
+		IsRead:       false,
+		SenderName:   sender.Nickname,
+		SenderAvatar: sender.Avatar,
+		CreatedAt:    time.Now(),
 	}
 
 	_, err = db.MongoDB.Collection("messages").InsertOne(ctx, msg)
@@ -305,11 +319,13 @@ func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
 	}
 
 	eventData := MessageEventData{
-		ID:        msg.ID.Hex(),
-		SenderID:  senderIDStr,
-		GroupID:   groupIDStr,
-		Content:   content,
-		CreatedAt: msg.CreatedAt,
+		ID:           msg.ID.Hex(),
+		SenderID:     senderIDStr,
+		GroupID:      groupIDStr,
+		Content:      content,
+		SenderName:   sender.Nickname,
+		SenderAvatar: sender.Avatar,
+		CreatedAt:    msg.CreatedAt,
 	}
 
 	wsMsg := WSMessage{
@@ -416,12 +432,14 @@ func triggerAIResponse(groupIDStr, aiName, senderIDStr, originalMsg string) {
 func saveAndBroadcastAIResponse(ctx context.Context, groupID primitive.ObjectID, groupIDStr string, aiMember models.AIMember, response string) {
 	// Save AI response to messages
 	aiMsg := models.Message{
-		ID:        primitive.NewObjectID(),
-		SenderID:  aiMember.UserID,
-		GroupID:   groupID,
-		Content:   response,
-		IsRead:    false,
-		CreatedAt: time.Now(),
+		ID:           primitive.NewObjectID(),
+		SenderID:     aiMember.UserID,
+		GroupID:      groupID,
+		Content:      response,
+		IsRead:       false,
+		SenderName:   aiMember.Name,
+		SenderAvatar: aiMember.Avatar,
+		CreatedAt:    time.Now(),
 	}
 
 	_, err := db.MongoDB.Collection("messages").InsertOne(ctx, aiMsg)
@@ -433,11 +451,13 @@ func saveAndBroadcastAIResponse(ctx context.Context, groupID primitive.ObjectID,
 
 	// Broadcast AI response
 	eventData := MessageEventData{
-		ID:        aiMsg.ID.Hex(),
-		SenderID:  aiMember.UserID.Hex(),
-		GroupID:   groupIDStr,
-		Content:   response,
-		CreatedAt: aiMsg.CreatedAt,
+		ID:           aiMsg.ID.Hex(),
+		SenderID:     aiMember.UserID.Hex(),
+		GroupID:      groupIDStr,
+		Content:      response,
+		SenderName:   aiMember.Name,
+		SenderAvatar: aiMember.Avatar,
+		CreatedAt:    aiMsg.CreatedAt,
 	}
 
 	wsMsg := WSMessage{
@@ -719,21 +739,40 @@ func GetChatMessages(c *gin.Context) {
 	}
 
 	type MessageResponse struct {
-		ID         string    `json:"id"`
-		SenderID   string    `json:"sender_id"`
-		ReceiverID string    `json:"receiver_id"`
-		Content    string    `json:"content"`
-		CreatedAt  time.Time `json:"created_at"`
+		ID           string    `json:"id"`
+		SenderID     string    `json:"sender_id"`
+		ReceiverID   string    `json:"receiver_id"`
+		Content      string    `json:"content"`
+		SenderName   string    `json:"sender_name,omitempty"`
+		SenderAvatar string    `json:"sender_avatar,omitempty"`
+		CreatedAt    time.Time `json:"created_at"`
 	}
+
+	// For compatibility/fallback, query users to populate missing names/avatars in history
+	userCache := make(map[primitive.ObjectID]models.User)
 
 	response := make([]MessageResponse, 0)
 	for _, m := range dbMsgs {
+		sName := m.SenderName
+		sAvatar := m.SenderAvatar
+		if sName == "" {
+			u, exists := userCache[m.SenderID]
+			if !exists {
+				db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": m.SenderID}).Decode(&u)
+				userCache[m.SenderID] = u
+			}
+			sName = u.Nickname
+			sAvatar = u.Avatar
+		}
+
 		response = append(response, MessageResponse{
-			ID:         m.ID.Hex(),
-			SenderID:   m.SenderID.Hex(),
-			ReceiverID: m.ReceiverID.Hex(),
-			Content:    m.Content,
-			CreatedAt:  m.CreatedAt,
+			ID:           m.ID.Hex(),
+			SenderID:     m.SenderID.Hex(),
+			ReceiverID:   m.ReceiverID.Hex(),
+			Content:      m.Content,
+			SenderName:   sName,
+			SenderAvatar: sAvatar,
+			CreatedAt:    m.CreatedAt,
 		})
 	}
 

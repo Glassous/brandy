@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"brandybackend/db"
@@ -19,7 +20,7 @@ type RateLimitConfig struct {
 
 var (
 	DefaultRateLimit = RateLimitConfig{
-		MaxRequests: 60,
+		MaxRequests: 200,
 		Window:      time.Minute,
 	}
 	AuthRateLimit = RateLimitConfig{
@@ -34,6 +35,11 @@ var (
 
 func RateLimitMiddleware(config RateLimitConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if isWhitelistedRoute(c) {
+			c.Next()
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
@@ -56,6 +62,21 @@ func RateLimitMiddleware(config RateLimitConfig) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isWhitelistedRoute(c *gin.Context) bool {
+	path := c.Request.URL.Path
+	method := c.Request.Method
+	if method != "GET" {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/chats/") && strings.HasSuffix(path, "/messages") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/groups/") && strings.HasSuffix(path, "/messages") {
+		return true
+	}
+	return false
 }
 
 func getRateLimitKey(c *gin.Context) string {

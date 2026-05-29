@@ -29,4 +29,4 @@ brandybackend/.env
 
 # Go build output
 brandybackend/brandybackend.exe
-
+brandybackend/server.exe

@@ -4,6 +4,8 @@ export interface LocalMessage {
   receiver_id?: string;
   group_id?: string;
   content: string;
+  sender_name?: string;
+  sender_avatar?: string;
   created_at: string;
   friend_id?: string; // Helper field to easily query by friend ID
 }

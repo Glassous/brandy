@@ -1536,23 +1536,30 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               const isFirstOfGroup = i === 0 || allMsgs[i - 1].sender_id !== m.sender_id;
 
               // Resolve sender nickname & avatar for group chats
-              let senderNickname = '';
-              let senderAvatar = undefined;
+              let senderNickname = m.sender_name || '';
+              let senderAvatar = m.sender_avatar;
               let senderIsAI = false;
-              if (isGroup && groupDetail && groupDetail.members) {
-                const member = groupDetail.members.find((mb: any) => mb.id === m.sender_id);
-                if (member) {
-                  senderNickname = member.nickname;
-                  senderAvatar = member.avatar;
+
+              if (isGroup) {
+                // Determine if sender is AI (to set senderIsAI flag)
+                if (aiMembers.length > 0) {
+                  const aiMember = aiMembers.find((ai: any) => ai.user_id === m.sender_id);
+                  if (aiMember) {
+                    senderIsAI = true;
+                    if (!senderNickname) {
+                      senderNickname = aiMember.name;
+                      senderAvatar = aiMember.avatar;
+                    }
+                  }
                 }
-              }
-              // Check AI members if not found in regular members
-              if (!senderNickname && isGroup && aiMembers.length > 0) {
-                const aiMember = aiMembers.find((ai: any) => ai.user_id === m.sender_id);
-                if (aiMember) {
-                  senderNickname = aiMember.name;
-                  senderAvatar = aiMember.avatar;
-                  senderIsAI = true;
+
+                // Fallback for regular members if backend values are missing (e.g. legacy local cache)
+                if (!senderNickname && groupDetail && groupDetail.members) {
+                  const member = groupDetail.members.find((mb: any) => mb.id === m.sender_id);
+                  if (member) {
+                    senderNickname = member.nickname;
+                    senderAvatar = member.avatar;
+                  }
                 }
               }
    

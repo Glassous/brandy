@@ -35,13 +35,15 @@ type FriendRequest struct {
 }
 
 type Message struct {
-	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	SenderID   primitive.ObjectID `bson:"sender_id" json:"sender_id"`
-	ReceiverID primitive.ObjectID `bson:"receiver_id,omitempty" json:"receiver_id,omitempty"`
-	GroupID    primitive.ObjectID `bson:"group_id,omitempty" json:"group_id,omitempty"`
-	Content    string             `bson:"content" json:"content"`
-	IsRead     bool               `bson:"is_read" json:"is_read"`
-	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
+	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	SenderID     primitive.ObjectID `bson:"sender_id" json:"sender_id"`
+	ReceiverID   primitive.ObjectID `bson:"receiver_id,omitempty" json:"receiver_id,omitempty"`
+	GroupID      primitive.ObjectID `bson:"group_id,omitempty" json:"group_id,omitempty"`
+	Content      string             `bson:"content" json:"content"`
+	IsRead       bool               `bson:"is_read" json:"is_read"`
+	SenderName   string             `bson:"sender_name,omitempty" json:"sender_name,omitempty"`
+	SenderAvatar string             `bson:"sender_avatar,omitempty" json:"sender_avatar,omitempty"`
+	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
 }
 
 type Group struct {
