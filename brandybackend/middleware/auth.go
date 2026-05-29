@@ -1,14 +1,20 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"brandybackend/db"
+	"brandybackend/models"
+
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 var jwtSecret []byte
@@ -84,3 +90,36 @@ func AuthMiddleware() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+func AdminMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userIDStr := c.GetString("userID")
+		userID, err := primitive.ObjectIDFromHex(userIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 ID"})
+			c.Abort()
+			return
+		}
+
+		collection := db.MongoDB.Collection("users")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var user models.User
+		err = collection.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在"})
+			c.Abort()
+			return
+		}
+
+		if user.Role != "admin" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "仅限管理员访问该接口"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+

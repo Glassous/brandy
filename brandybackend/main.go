@@ -58,6 +58,29 @@ func main() {
 		auth.POST("/reset-password", handlers.ResetPassword)
 	}
 
+	// Admin Public Routes
+	adminAuth := r.Group("/api/admin/auth")
+	adminAuth.Use(middleware.RateLimitMiddleware(middleware.AuthRateLimit))
+	{
+		adminAuth.POST("/register", handlers.AdminRegister)
+		adminAuth.POST("/login", handlers.AdminLogin)
+		adminAuth.POST("/login-code", handlers.AdminLoginCode)
+	}
+
+	// Admin Protected Routes
+	adminAPI := r.Group("/api/admin")
+	adminAPI.Use(middleware.AuthMiddleware())
+	adminAPI.Use(middleware.AdminMiddleware())
+	adminAPI.Use(middleware.RateLimitMiddleware(middleware.DefaultRateLimit))
+	{
+		adminAPI.GET("/stats", handlers.GetSystemStats)
+		adminAPI.GET("/users", handlers.GetAdminUsers)
+		adminAPI.PUT("/users/:id", handlers.UpdateAdminUser)
+		adminAPI.DELETE("/users/:id", handlers.DeleteAdminUser)
+		adminAPI.GET("/groups", handlers.GetAdminGroups)
+		adminAPI.DELETE("/groups/:id", handlers.DeleteAdminGroup)
+	}
+
 	// Protected Routes
 	api := r.Group("/api")
 	api.Use(middleware.AuthMiddleware())

@@ -221,6 +221,7 @@ func Register(c *gin.Context) {
 			Nickname:           newUser.Nickname,
 			Avatar:             newUser.Avatar,
 			CustomTransferPath: newUser.CustomTransferPath,
+			Role:               newUser.Role,
 			CreatedAt:          newUser.CreatedAt,
 		},
 	})
@@ -274,6 +275,7 @@ func Login(c *gin.Context) {
 			Nickname:           user.Nickname,
 			Avatar:             user.Avatar,
 			CustomTransferPath: user.CustomTransferPath,
+			Role:               user.Role,
 			CreatedAt:          user.CreatedAt,
 		},
 	})
@@ -326,6 +328,7 @@ func LoginWithCode(c *gin.Context) {
 			Nickname:           user.Nickname,
 			Avatar:             user.Avatar,
 			CustomTransferPath: user.CustomTransferPath,
+			Role:               user.Role,
 			CreatedAt:          user.CreatedAt,
 		},
 	})
@@ -455,6 +458,7 @@ func GetProfile(c *gin.Context) {
 		Nickname:           user.Nickname,
 		Avatar:             user.Avatar,
 		CustomTransferPath: user.CustomTransferPath,
+		Role:               user.Role,
 		CreatedAt:          user.CreatedAt,
 	})
 }

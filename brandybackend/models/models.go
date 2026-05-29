@@ -15,6 +15,7 @@ type User struct {
 	Email              string             `bson:"email" json:"email"`
 	CustomTransferPath string             `bson:"custom_transfer_path" json:"custom_transfer_path"`
 	IsAI               bool               `bson:"is_ai,omitempty" json:"is_ai,omitempty"`
+	Role               string             `bson:"role,omitempty" json:"role,omitempty"`
 	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
 }
 
@@ -63,6 +64,7 @@ type UserResponse struct {
 	Avatar             string    `json:"avatar"`
 	CustomTransferPath string    `json:"custom_transfer_path"`
 	IsAI               bool      `json:"is_ai,omitempty"`
+	Role               string    `json:"role,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 
