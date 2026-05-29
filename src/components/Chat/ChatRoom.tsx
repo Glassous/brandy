@@ -6,6 +6,7 @@ import { useApp, type Message } from '../../contexts/AppContext';
 import { useToast } from '../shared/Toast';
 import { API_BASE } from '../../config';
 import COS from 'cos-js-sdk-v5';
+import { calculateContextMenuPosition, calculatePopoverPosition } from '../../utils/popupPosition';
 
 interface ChatRoomProps {
   currentUserId: string;
@@ -680,7 +681,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
   // Member Action Popover State
   const [activeMemberMenuId, setActiveMemberMenuId] = useState<string | null>(null);
-  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number } | null>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
 
   // Mention List State
   const [showMentionList, setShowMentionList] = useState(false);
@@ -798,9 +799,14 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const handleContextMenu = (e: React.MouseEvent, messageId: string, content: string, senderId: string, createdAt: string) => {
     e.preventDefault();
     if (isMultiSelect) return;
-    setContextMenu({
+    const pos = calculateContextMenuPosition({
       x: e.clientX,
       y: e.clientY,
+      popupSize: { width: 150, height: 250 }
+    });
+    setContextMenu({
+      x: pos.left,
+      y: pos.top,
       messageId,
       content,
       senderId,
@@ -2413,7 +2419,11 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           } else {
                             const rect = e.currentTarget.getBoundingClientRect();
                             setActiveMemberMenuId(member.id);
-                            setPopoverPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                            const pos = calculatePopoverPosition({
+                              triggerRect: rect,
+                              popupSize: { width: 180, height: 120 }
+                            });
+                            setPopoverPos(pos);
                           }
                         }}
                       >
@@ -2421,7 +2431,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                       </button>
                     )}
                     {isMenuOpen && hasActions && (
-                      <div className="member-popover" style={popoverPos ? { top: popoverPos.top, right: popoverPos.right } : undefined} onClick={(e) => e.stopPropagation()}>
+                      <div className="member-popover" style={popoverPos ? { top: popoverPos.top, left: popoverPos.left } : undefined} onClick={(e) => e.stopPropagation()}>
                         {canMute && (
                           <div className="member-popover-item">
                             <span>禁言</span>

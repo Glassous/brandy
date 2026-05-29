@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Avatar } from '../shared/Avatar';
 import type { ChatSession } from '../../contexts/AppContext';
 import { PinIcon, CloseIcon } from '../shared/Icons';
+import { calculateContextMenuPosition } from '../../utils/popupPosition';
 
 interface ChatListProps {
   chats: ChatSession[];
@@ -52,8 +53,11 @@ function formatLastMessage(msg: string) {
         if (parsed.type === 'file_share') {
           return '[文件]';
         }
+        return '[消息]';
       }
-    } catch { /* ignore */ }
+    } catch {
+      return '[消息]';
+    }
   }
   return msg;
 }
@@ -77,7 +81,12 @@ export function ChatList({
 
   const handleContextMenu = (e: React.MouseEvent, friendId: string) => {
     e.preventDefault();
-    setContextMenu({ friendId, x: e.clientX, y: e.clientY });
+    const pos = calculateContextMenuPosition({
+      x: e.clientX,
+      y: e.clientY,
+      popupSize: { width: 200, height: 80 }
+    });
+    setContextMenu({ friendId, x: pos.left, y: pos.top });
   };
 
   // Sort pinned chats first, then sort by last message time
