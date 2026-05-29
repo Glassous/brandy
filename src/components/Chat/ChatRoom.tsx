@@ -7,6 +7,9 @@ import { useToast } from '../shared/Toast';
 import { API_BASE } from '../../config';
 import COS from 'cos-js-sdk-v5';
 import { calculateContextMenuPosition, calculatePopoverPosition } from '../../utils/popupPosition';
+import CloudFilePicker from './CloudFilePicker';
+import PendingFilesBar, { type PendingFile } from './PendingFilesBar';
+import ChatBundleCard from './ChatBundleCard';
 
 interface ChatRoomProps {
   currentUserId: string;
@@ -683,6 +686,16 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const [activeMemberMenuId, setActiveMemberMenuId] = useState<string | null>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
 
+  // Upload Menu & Cloud Picker
+  const [showUploadMenu, setShowUploadMenu] = useState(false);
+  const [showCloudPicker, setShowCloudPicker] = useState(false);
+  const uploadMenuRef = useRef<HTMLDivElement>(null);
+
+  // Pending Files
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [sendMode, setSendMode] = useState<'independent' | 'combined'>('independent');
+  const [isSendingFiles, setIsSendingFiles] = useState(false);
+
   // Mention List State
   const [showMentionList, setShowMentionList] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -692,6 +705,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   useEffect(() => {
     onLoad(chatId, isGroup);
     setShowGroupSettings(false);
+    setPendingFiles([]);
   }, [chatId, isGroup, onLoad]);
 
   // Handle Android/browser back button for group settings overlay
@@ -791,6 +805,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       setContextMenu(null);
       setActiveMemberMenuId(null);
       setPopoverPos(null);
+      setShowUploadMenu(false);
     };
     window.addEventListener('click', handleCloseMenu);
     return () => window.removeEventListener('click', handleCloseMenu);
@@ -911,81 +926,171 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!text.trim() && pendingFiles.length === 0) return;
+    if (isUserMuted()) return;
 
     if (editingMsg) {
       const ok = await editMessage(editingMsg.id, text.trim());
-      if (ok) {
-        setEditingMsg(null);
-        setText('');
-      }
-    } else if (quotedMsg) {
-      sendQuoteMessage(
-        chatId,
-        text.trim(),
-        quotedMsg.id,
-        quotedMsg.sender_name || '?',
-        quotedMsg.content,
-        isGroup
-      );
-      setQuotedMsg(null);
-      setText('');
-    } else {
-      onSend(chatId, text.trim());
-      setText('');
+      if (ok) { setEditingMsg(null); setText(''); }
+      return;
     }
+
+    const textContent = text.trim();
+
+    if (textContent) {
+      if (quotedMsg) {
+        sendQuoteMessage(chatId, textContent, quotedMsg.id, quotedMsg.sender_name || '?', quotedMsg.content, isGroup);
+        setQuotedMsg(null);
+      } else {
+        onSend(chatId, textContent);
+      }
+    }
+    if (quotedMsg) setQuotedMsg(null);
+    setText('');
+
+    if (pendingFiles.length === 0) return;
+
+    setIsSendingFiles(true);
+
+    if (sendMode === 'independent') {
+      for (const pf of pendingFiles) {
+        if (pf.source === 'local' && pf.file) {
+          await uploadAndSendSingleFile(pf);
+        } else if (pf.source === 'cloud' && pf.cloudItem) {
+          onSend(chatId, JSON.stringify({ type: 'file_share', ...pf.cloudItem }));
+        }
+      }
+    } else {
+      const bundleFiles: any[] = [];
+      for (const pf of pendingFiles) {
+        if (pf.source === 'local' && pf.file) {
+          try {
+            setPendingFiles(prev => prev.map(p => p.id === pf.id ? { ...p, uploadStatus: 'uploading' as const, uploadProgress: 0 } : p));
+            const result = await uploadFileToCOS(pf.file, pf.fileType, pf.id);
+            setPendingFiles(prev => prev.map(p => p.id === pf.id ? { ...p, uploadStatus: 'done' as const } : p));
+            bundleFiles.push(result);
+          } catch (err: any) {
+            setPendingFiles(prev => prev.map(p => p.id === pf.id ? { ...p, uploadStatus: 'error' as const } : p));
+            showToast(`${pf.fileName} 上传失败: ${err.message || ''}`, 'error');
+            setIsSendingFiles(false);
+            return;
+          }
+        } else if (pf.source === 'cloud' && pf.cloudItem) {
+          bundleFiles.push({ ...pf.cloudItem, source: 'cloud' });
+        }
+      }
+      const bundleContent = JSON.stringify({
+        type: 'chat_bundle',
+        text: textContent || undefined,
+        files: bundleFiles
+      });
+      onSend(chatId, bundleContent);
+    }
+
+    setPendingFiles([]);
+    setIsSendingFiles(false);
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const addToPendingFiles = (files: FileList | File[]) => {
+    const pending: PendingFile[] = Array.from(files).map(file => {
+      let fileType: 'image' | 'video' | 'audio' | 'file' = 'file';
+      if (file.type.startsWith('image/')) fileType = 'image';
+      else if (file.type.startsWith('video/')) fileType = 'video';
+      else if (file.type.startsWith('audio/')) fileType = 'audio';
 
-    const file = files[0];
+      return {
+        id: `pending-${Math.random().toString(36).substring(2, 9)}-${Date.now()}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        fileType,
+        fileName: file.name,
+        fileSize: file.size,
+        source: 'local' as const,
+        uploadStatus: 'pending' as const,
+        uploadProgress: 0,
+      };
+    });
+    setPendingFiles(prev => [...prev, ...pending]);
+  };
+
+  const removePendingFile = (id: string) => {
+    setPendingFiles(prev => {
+      const file = prev.find(f => f.id === id);
+      if (file?.previewUrl) URL.revokeObjectURL(file.previewUrl);
+      return prev.filter(f => f.id !== id);
+    });
+  };
+
+  const uploadFileToCOS = (file: File, fileType: string, pendingId: string): Promise<{ file_name: string; file_size: number; file_type: string; url: string; cos_key: string }> => {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const credRes = await fetch(`${API_BASE}/api/chat/upload-credential`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ filename: file.name, size: file.size })
+        });
+        if (!credRes.ok) {
+          const errData = await credRes.json();
+          throw new Error(errData.error || '获取上传凭证失败');
+        }
+        const credData = await credRes.json();
+        const { credentials, bucket, region, cosKey, url } = credData;
+
+        const cos = new COS({
+          getAuthorization: (_options, callback) => {
+            callback({
+              TmpSecretId: credentials.tmpSecretId,
+              TmpSecretKey: credentials.tmpSecretKey,
+              SecurityToken: credentials.sessionToken,
+              StartTime: credData.startTime,
+              ExpiredTime: credData.expiredTime,
+            });
+          },
+        });
+
+        cos.uploadFile({
+          Bucket: bucket,
+          Region: region,
+          Key: cosKey,
+          Body: file,
+          onProgress: (progressData) => {
+            const percent = Math.round((progressData.loaded / progressData.total) * 100);
+            setPendingFiles(prev => prev.map(p => p.id === pendingId ? { ...p, uploadProgress: percent } : p));
+          }
+        }, (err) => {
+          if (err) reject(err);
+          else resolve({ file_name: file.name, file_size: file.size, file_type: fileType, url, cos_key: cosKey });
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  };
+
+  const uploadAndSendSingleFile = async (pf: PendingFile) => {
+    if (!pf.file) return;
+    const file = pf.file;
+    const fileType = pf.fileType;
     const tempId = `temp-${Math.random().toString(36).substring(2, 9)}-${Date.now()}`;
-    
-    let fileType: 'image' | 'video' | 'audio' | 'file' = 'file';
-    if (file.type.startsWith('image/')) fileType = 'image';
-    else if (file.type.startsWith('video/')) fileType = 'video';
-    else if (file.type.startsWith('audio/')) fileType = 'audio';
+    const localUrl = pf.previewUrl;
 
-    const localUrl = URL.createObjectURL(file);
-
-    const newTempMsg = {
+    setTempMessages(prev => [...prev, {
       id: tempId,
       sender_id: currentUserId,
-      content: JSON.stringify({
-        type: 'chat_file',
-        file_name: file.name,
-        file_size: file.size,
-        file_type: fileType,
-        url: localUrl,
-        cos_key: '',
-        uploading: true,
-        progress: 0
-      }),
+      content: JSON.stringify({ type: 'chat_file', file_name: file.name, file_size: file.size, file_type: fileType, url: localUrl, cos_key: '', uploading: true, progress: 0 }),
       created_at: new Date().toISOString()
-    };
-
-    setTempMessages(prev => [...prev, newTempMsg]);
+    }]);
 
     try {
       const credRes = await fetch(`${API_BASE}/api/chat/upload-credential`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          filename: file.name,
-          size: file.size
-        })
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ filename: file.name, size: file.size })
       });
-
       if (!credRes.ok) {
         const errData = await credRes.json();
         throw new Error(errData.error || '获取上传凭证失败');
       }
-
       const credData = await credRes.json();
       const { credentials, bucket, region, cosKey, url } = credData;
 
@@ -1001,55 +1106,54 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         },
       });
 
-      cos.uploadFile({
-        Bucket: bucket,
-        Region: region,
-        Key: cosKey,
-        Body: file,
-        onProgress: (progressData) => {
-          const percent = Math.round((progressData.loaded / progressData.total) * 100);
-          setTempMessages(prev => prev.map(m => {
-            if (m.id !== tempId) return m;
-            return {
-              ...m,
-              content: JSON.stringify({
-                type: 'chat_file',
-                file_name: file.name,
-                file_size: file.size,
-                file_type: fileType,
-                url: localUrl,
-                cos_key: '',
-                uploading: true,
-                progress: percent
-              })
-            };
-          }));
-        }
-      }, (err, _data) => {
-        if (err) {
-          showToast(`文件直传 COS 失败: ${(err as any).message || ''}`, 'error');
-          setTempMessages(prev => prev.filter(m => m.id !== tempId));
-          return;
-        }
-
-        const finalContent = JSON.stringify({
-          type: 'chat_file',
-          file_name: file.name,
-          file_size: file.size,
-          file_type: fileType,
-          url: url,
-          cos_key: cosKey
+      await new Promise<void>((resolve, reject) => {
+        cos.uploadFile({
+          Bucket: bucket,
+          Region: region,
+          Key: cosKey,
+          Body: file,
+          onProgress: (progressData) => {
+            const percent = Math.round((progressData.loaded / progressData.total) * 100);
+            setTempMessages(prev => prev.map(m => {
+              if (m.id !== tempId) return m;
+              return { ...m, content: JSON.stringify({ type: 'chat_file', file_name: file.name, file_size: file.size, file_type: fileType, url: localUrl, cos_key: '', uploading: true, progress: percent }) };
+            }));
+          }
+        }, (err) => {
+          if (err) reject(err);
+          else resolve();
         });
-
-        onSend(chatId, finalContent);
-        setTempMessages(prev => prev.filter(m => m.id !== tempId));
       });
 
-    } catch (err: any) {
-      showToast(err.message || '文件上传失败', 'error');
+      const finalContent = JSON.stringify({ type: 'chat_file', file_name: file.name, file_size: file.size, file_type: fileType, url, cos_key: cosKey });
+      onSend(chatId, finalContent);
       setTempMessages(prev => prev.filter(m => m.id !== tempId));
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err: any) {
+      showToast(`${file.name} 上传失败: ${err.message || ''}`, 'error');
+      setTempMessages(prev => prev.filter(m => m.id !== tempId));
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    addToPendingFiles(files);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const fileItems: File[] = [];
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) fileItems.push(file);
+      }
+    }
+    if (fileItems.length > 0) {
+      e.preventDefault();
+      addToPendingFiles(fileItems);
     }
   };
 
@@ -1954,6 +2058,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                         {(() => {
                           let fileShareData = null;
                           let chatFileData = null;
+                          let chatBundleData = null;
                           if (m.content.startsWith('{')) {
                             try {
                               const parsed = JSON.parse(m.content);
@@ -1962,12 +2067,15 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                                   fileShareData = parsed;
                                 } else if (parsed.type === 'chat_file') {
                                   chatFileData = parsed;
+                                } else if (parsed.type === 'chat_bundle') {
+                                  chatBundleData = parsed;
                                 }
                               }
                             } catch { /* ignore */ }
                           }
 
-                          const isMedia = chatFileData && (chatFileData.file_type === 'image' || chatFileData.file_type === 'video');
+                          const isMedia = (chatFileData && (chatFileData.file_type === 'image' || chatFileData.file_type === 'video')) ||
+                            (chatBundleData && chatBundleData.files?.length > 0 && chatBundleData.files.every((f: any) => f.file_type === 'image'));
                           const bubbleStyle = isMedia ? {
                             cursor: isMultiSelect ? 'pointer' : 'default',
                             maxWidth: '100%',
@@ -2015,7 +2123,8 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                               )}
                               {fileShareData && <FileShareCard fileShareData={fileShareData} isOwn={isOwn} />}
                               {chatFileData && <ChatFileCard data={chatFileData} />}
-                              {!fileShareData && !chatFileData && (
+                              {chatBundleData && <ChatBundleCard data={chatBundleData} />}
+                              {!fileShareData && !chatFileData && !chatBundleData && (
                                 <span className="msg-text">
                                   {m.content}
                                   {m.is_edited && (
@@ -2209,24 +2318,79 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               </div>
             )}
 
+            <PendingFilesBar
+              files={pendingFiles}
+              sendMode={sendMode}
+              onRemove={removePendingFile}
+              onModeChange={setSendMode}
+              isSending={isSendingFiles}
+            />
+
             <form onSubmit={handleSend} className="cr-input-bar">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUserMuted()}
-                title={isUserMuted() ? "禁言中" : "发送文件/媒体"}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-              </button>
+              <div style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                  onClick={(e) => { e.stopPropagation(); setShowUploadMenu(prev => !prev); }}
+                  disabled={isUserMuted()}
+                  title={isUserMuted() ? "禁言中" : "发送文件/媒体"}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+                {showUploadMenu && (
+                  <div ref={uploadMenuRef} onClick={(e) => e.stopPropagation()} style={{
+                    position: 'absolute', bottom: '100%', left: 0, marginBottom: '4px',
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+                    zIndex: 300, minWidth: '160px', padding: '6px 0',
+                    animation: 'popoverFadeIn 0.15s ease-out'
+                  }}>
+                    <button
+                      onClick={() => { fileInputRef.current?.click(); setShowUploadMenu(false); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', width: '100%',
+                        padding: '10px 14px', fontSize: '13px', color: 'var(--text)',
+                        cursor: 'pointer', background: 'none', border: 'none',
+                        transition: 'background 0.15s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                      </svg>
+                      从本地选择
+                    </button>
+                    <button
+                      onClick={() => { setShowCloudPicker(true); setShowUploadMenu(false); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', width: '100%',
+                        padding: '10px 14px', fontSize: '13px', color: 'var(--text)',
+                        cursor: 'pointer', background: 'none', border: 'none',
+                        transition: 'background 0.15s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+                      </svg>
+                      从云盘上传
+                    </button>
+                  </div>
+                )}
+              </div>
               <input
                 type="file"
                 ref={fileInputRef}
                 style={{ display: 'none' }}
                 onChange={handleFileChange}
+                multiple
               />
               <input
                 type="text"
@@ -2235,7 +2399,6 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                 disabled={isUserMuted()}
                 onChange={e => {
                   setText(e.target.value);
-                  // Detect @ mention
                   const cursorPos = e.target.selectionStart || 0;
                   const textBeforeCursor = e.target.value.substring(0, cursorPos);
                   const lastAtIndex = textBeforeCursor.lastIndexOf('@');
@@ -2251,7 +2414,6 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   setMentionQuery('');
                 }}
                 onFocus={() => {
-                  // Re-show mention list if @ is present
                   const cursorPos = text.length;
                   const textBeforeCursor = text.substring(0, cursorPos);
                   const lastAtIndex = textBeforeCursor.lastIndexOf('@');
@@ -2263,14 +2425,34 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                     }
                   }
                 }}
+                onPaste={handlePaste}
               />
-              <button type="submit" className="btn cr-send" disabled={!text.trim() || isUserMuted()}>
+              <button type="submit" className="btn cr-send" disabled={(!text.trim() && pendingFiles.length === 0) || isUserMuted()}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13" />
                   <polygon points="22 2 15 22 11 13 2 9 22 2" />
                 </svg>
               </button>
             </form>
+
+            <CloudFilePicker
+              isOpen={showCloudPicker}
+              onClose={() => setShowCloudPicker(false)}
+              onSelect={(selectedFiles) => {
+                const cloudPending: PendingFile[] = selectedFiles.map(sf => ({
+                  id: `pending-cloud-${Math.random().toString(36).substring(2, 9)}-${Date.now()}`,
+                  previewUrl: '',
+                  fileType: 'file' as const,
+                  fileName: sf.file_name,
+                  fileSize: sf.file_size,
+                  source: 'cloud' as const,
+                  cloudItem: { file_id: sf.file_id, file_name: sf.file_name, file_size: sf.file_size, url: sf.url },
+                  uploadStatus: 'done' as const,
+                  uploadProgress: 100,
+                }));
+                setPendingFiles(prev => [...prev, ...cloudPending]);
+              }}
+            />
           </div>
         )}
       </div>
