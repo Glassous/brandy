@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -77,20 +78,29 @@ type WSMessage struct {
 }
 
 type RawMessagePayload struct {
-	ReceiverID string `json:"receiver_id,omitempty"`
-	GroupID    string `json:"group_id,omitempty"`
-	Content    string `json:"content"`
+	ReceiverID      string `json:"receiver_id,omitempty"`
+	GroupID         string `json:"group_id,omitempty"`
+	Content         string `json:"content"`
+	QuoteID         string `json:"quote_id,omitempty"`
+	QuoteSenderName string `json:"quote_sender_name,omitempty"`
+	QuoteContent    string `json:"quote_content,omitempty"`
 }
 
 type MessageEventData struct {
-	ID           string    `json:"id"`
-	SenderID     string    `json:"sender_id"`
-	ReceiverID   string    `json:"receiver_id,omitempty"`
-	GroupID      string    `json:"group_id,omitempty"`
-	Content      string    `json:"content"`
-	SenderName   string    `json:"sender_name,omitempty"`
-	SenderAvatar string    `json:"sender_avatar,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	SenderID        string    `json:"sender_id"`
+	ReceiverID      string    `json:"receiver_id,omitempty"`
+	GroupID         string    `json:"group_id,omitempty"`
+	Content         string    `json:"content"`
+	SenderName      string    `json:"sender_name,omitempty"`
+	SenderAvatar    string    `json:"sender_avatar,omitempty"`
+	IsRecalled      bool      `json:"is_recalled"`
+	RecalledAt      *time.Time`json:"recalled_at,omitempty"`
+	IsEdited        bool      `json:"is_edited"`
+	QuoteID         string    `json:"quote_id,omitempty"`
+	QuoteSenderName string    `json:"quote_sender_name,omitempty"`
+	QuoteContent    string    `json:"quote_content,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // HandleWS upgrades HTTP connection and registers the user
@@ -173,9 +183,9 @@ func (c *Client) readPump() {
 			}
 
 			if payload.ReceiverID != "" {
-				go handleIncomingMessage(c.UserID, payload.ReceiverID, payload.Content)
+				go handleIncomingMessage(c.UserID, payload)
 			} else if payload.GroupID != "" {
-				go handleIncomingGroupMessage(c.UserID, payload.GroupID, payload.Content)
+				go handleIncomingGroupMessage(c.UserID, payload)
 			}
 		}
 	}
@@ -222,9 +232,20 @@ func (c *Client) writePump() {
 	}
 }
 
-func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
+func sendWSError(userIDStr, errMsg string) {
+	wsMsg := WSMessage{
+		Event: "error",
+		Data: gin.H{
+			"message": errMsg,
+		},
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+	db.RedisClient.Publish(context.Background(), "user_messages:"+userIDStr, wsMsgBytes)
+}
+
+func handleIncomingMessage(senderIDStr string, payload RawMessagePayload) {
 	senderID, _ := primitive.ObjectIDFromHex(senderIDStr)
-	receiverID, _ := primitive.ObjectIDFromHex(receiverIDStr)
+	receiverID, _ := primitive.ObjectIDFromHex(payload.ReceiverID)
 
 	// Verify friendship
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -233,23 +254,33 @@ func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
 	var existingFriend models.Friend
 	err := db.MongoDB.Collection("friends").FindOne(ctx, bson.M{"user_id": senderID, "friend_id": receiverID}).Decode(&existingFriend)
 	if err != nil {
-		log.Printf("Cannot send message: Users %s and %s are not friends", senderIDStr, receiverIDStr)
+		log.Printf("Cannot send message: Users %s and %s are not friends", senderIDStr, payload.ReceiverID)
 		return
 	}
 
 	var sender models.User
 	db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": senderID}).Decode(&sender)
 
+	var quoteID *primitive.ObjectID = nil
+	if payload.QuoteID != "" {
+		if qid, err := primitive.ObjectIDFromHex(payload.QuoteID); err == nil {
+			quoteID = &qid
+		}
+	}
+
 	// Save to DB
 	msg := models.Message{
-		ID:           primitive.NewObjectID(),
-		SenderID:     senderID,
-		ReceiverID:   receiverID,
-		Content:      content,
-		IsRead:       false,
-		SenderName:   sender.Nickname,
-		SenderAvatar: sender.Avatar,
-		CreatedAt:    time.Now(),
+		ID:              primitive.NewObjectID(),
+		SenderID:        senderID,
+		ReceiverID:      receiverID,
+		Content:         payload.Content,
+		IsRead:          false,
+		SenderName:      sender.Nickname,
+		SenderAvatar:    sender.Avatar,
+		QuoteID:         quoteID,
+		QuoteSenderName: payload.QuoteSenderName,
+		QuoteContent:    payload.QuoteContent,
+		CreatedAt:       time.Now(),
 	}
 
 	_, err = db.MongoDB.Collection("messages").InsertOne(ctx, msg)
@@ -259,13 +290,16 @@ func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
 	}
 
 	eventData := MessageEventData{
-		ID:           msg.ID.Hex(),
-		SenderID:     senderIDStr,
-		ReceiverID:   receiverIDStr,
-		Content:      content,
-		SenderName:   sender.Nickname,
-		SenderAvatar: sender.Avatar,
-		CreatedAt:    msg.CreatedAt,
+		ID:              msg.ID.Hex(),
+		SenderID:        senderIDStr,
+		ReceiverID:      payload.ReceiverID,
+		Content:         payload.Content,
+		SenderName:      sender.Nickname,
+		SenderAvatar:    sender.Avatar,
+		QuoteID:         payload.QuoteID,
+		QuoteSenderName: payload.QuoteSenderName,
+		QuoteContent:    payload.QuoteContent,
+		CreatedAt:       msg.CreatedAt,
 	}
 
 	wsMsg := WSMessage{
@@ -276,15 +310,15 @@ func handleIncomingMessage(senderIDStr, receiverIDStr, content string) {
 	wsMsgBytes, _ := json.Marshal(wsMsg)
 
 	// Publish to Redis for the receiver
-	db.RedisClient.Publish(context.Background(), "user_messages:"+receiverIDStr, wsMsgBytes)
+	db.RedisClient.Publish(context.Background(), "user_messages:"+payload.ReceiverID, wsMsgBytes)
 
 	// Publish to Redis for the sender (to sync multiple devices if needed, or to confirm receipt)
 	db.RedisClient.Publish(context.Background(), "user_messages:"+senderIDStr, wsMsgBytes)
 }
 
-func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
+func handleIncomingGroupMessage(senderIDStr string, payload RawMessagePayload) {
 	senderID, _ := primitive.ObjectIDFromHex(senderIDStr)
-	groupID, _ := primitive.ObjectIDFromHex(groupIDStr)
+	groupID, _ := primitive.ObjectIDFromHex(payload.GroupID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -293,23 +327,45 @@ func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
 	var group models.Group
 	err := db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": senderID}).Decode(&group)
 	if err != nil {
-		log.Printf("Cannot send group message: User %s is not a member of group %s", senderIDStr, groupIDStr)
+		log.Printf("Cannot send group message: User %s is not a member of group %s", senderIDStr, payload.GroupID)
 		return
+	}
+
+	// Check muting
+	if group.MuteAll && group.OwnerID != senderID {
+		sendWSError(senderIDStr, "全体禁言中")
+		return
+	}
+	if muteInfo, ok := group.MutedMembers[senderIDStr]; ok {
+		if muteInfo.MutedAt.After(time.Now()) { // Individual muting is active
+			sendWSError(senderIDStr, "您已被禁言")
+			return
+		}
 	}
 
 	var sender models.User
 	db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": senderID}).Decode(&sender)
 
+	var quoteID *primitive.ObjectID = nil
+	if payload.QuoteID != "" {
+		if qid, err := primitive.ObjectIDFromHex(payload.QuoteID); err == nil {
+			quoteID = &qid
+		}
+	}
+
 	// Save to MongoDB
 	msg := models.Message{
-		ID:           primitive.NewObjectID(),
-		SenderID:     senderID,
-		GroupID:      groupID,
-		Content:      content,
-		IsRead:       false,
-		SenderName:   sender.Nickname,
-		SenderAvatar: sender.Avatar,
-		CreatedAt:    time.Now(),
+		ID:              primitive.NewObjectID(),
+		SenderID:        senderID,
+		GroupID:         groupID,
+		Content:         payload.Content,
+		IsRead:          false,
+		SenderName:      sender.Nickname,
+		SenderAvatar:    sender.Avatar,
+		QuoteID:         quoteID,
+		QuoteSenderName: payload.QuoteSenderName,
+		QuoteContent:    payload.QuoteContent,
+		CreatedAt:       time.Now(),
 	}
 
 	_, err = db.MongoDB.Collection("messages").InsertOne(ctx, msg)
@@ -319,13 +375,16 @@ func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
 	}
 
 	eventData := MessageEventData{
-		ID:           msg.ID.Hex(),
-		SenderID:     senderIDStr,
-		GroupID:      groupIDStr,
-		Content:      content,
-		SenderName:   sender.Nickname,
-		SenderAvatar: sender.Avatar,
-		CreatedAt:    msg.CreatedAt,
+		ID:              msg.ID.Hex(),
+		SenderID:        senderIDStr,
+		GroupID:         payload.GroupID,
+		Content:         payload.Content,
+		SenderName:      sender.Nickname,
+		SenderAvatar:    sender.Avatar,
+		QuoteID:         payload.QuoteID,
+		QuoteSenderName: payload.QuoteSenderName,
+		QuoteContent:    payload.QuoteContent,
+		CreatedAt:       msg.CreatedAt,
 	}
 
 	wsMsg := WSMessage{
@@ -341,8 +400,8 @@ func handleIncomingGroupMessage(senderIDStr, groupIDStr, content string) {
 	}
 
 	// Check if message mentions an AI member
-	if aiName := extractAIMention(content); aiName != "" {
-		go triggerAIResponse(groupIDStr, aiName, senderIDStr, content)
+	if aiName := extractAIMention(payload.Content); aiName != "" {
+		go triggerAIResponse(payload.GroupID, aiName, senderIDStr, payload.Content)
 	}
 }
 
@@ -739,13 +798,19 @@ func GetChatMessages(c *gin.Context) {
 	}
 
 	type MessageResponse struct {
-		ID           string    `json:"id"`
-		SenderID     string    `json:"sender_id"`
-		ReceiverID   string    `json:"receiver_id"`
-		Content      string    `json:"content"`
-		SenderName   string    `json:"sender_name,omitempty"`
-		SenderAvatar string    `json:"sender_avatar,omitempty"`
-		CreatedAt    time.Time `json:"created_at"`
+		ID              string    `json:"id"`
+		SenderID        string    `json:"sender_id"`
+		ReceiverID      string    `json:"receiver_id"`
+		Content         string    `json:"content"`
+		SenderName      string    `json:"sender_name,omitempty"`
+		SenderAvatar    string    `json:"sender_avatar,omitempty"`
+		IsRecalled      bool      `json:"is_recalled"`
+		RecalledAt      *time.Time`json:"recalled_at,omitempty"`
+		IsEdited        bool      `json:"is_edited"`
+		QuoteID         string    `json:"quote_id,omitempty"`
+		QuoteSenderName string    `json:"quote_sender_name,omitempty"`
+		QuoteContent    string    `json:"quote_content,omitempty"`
+		CreatedAt       time.Time `json:"created_at"`
 	}
 
 	// For compatibility/fallback, query users to populate missing names/avatars in history
@@ -765,16 +830,206 @@ func GetChatMessages(c *gin.Context) {
 			sAvatar = u.Avatar
 		}
 
+		quoteIDStr := ""
+		if m.QuoteID != nil {
+			quoteIDStr = m.QuoteID.Hex()
+		}
+
 		response = append(response, MessageResponse{
-			ID:           m.ID.Hex(),
-			SenderID:     m.SenderID.Hex(),
-			ReceiverID:   m.ReceiverID.Hex(),
-			Content:      m.Content,
-			SenderName:   sName,
-			SenderAvatar: sAvatar,
-			CreatedAt:    m.CreatedAt,
+			ID:              m.ID.Hex(),
+			SenderID:        m.SenderID.Hex(),
+			ReceiverID:      m.ReceiverID.Hex(),
+			Content:         m.Content,
+			SenderName:      sName,
+			SenderAvatar:    sAvatar,
+			IsRecalled:      m.IsRecalled,
+			RecalledAt:      m.RecalledAt,
+			IsEdited:        m.IsEdited,
+			QuoteID:         quoteIDStr,
+			QuoteSenderName: m.QuoteSenderName,
+			QuoteContent:    m.QuoteContent,
+			CreatedAt:       m.CreatedAt,
 		})
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// RecallMessage handles soft deleting a message within 5 minutes
+func RecallMessage(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	msgIDStr := c.Param("id")
+	msgID, err := primitive.ObjectIDFromHex(msgIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message ID"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("messages")
+
+	var msg models.Message
+	err = collection.FindOne(ctx, bson.M{"_id": msgID}).Decode(&msg)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Message not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Verify owner
+	if msg.SenderID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You can only recall your own messages"})
+		return
+	}
+
+	// Verify time <= 5 minutes
+	if time.Since(msg.CreatedAt) > 5*time.Minute {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "You can only recall messages sent within 5 minutes"})
+		return
+	}
+
+	now := time.Now()
+	_, err = collection.UpdateOne(ctx, bson.M{"_id": msgID}, bson.M{
+		"$set": bson.M{
+			"is_recalled": true,
+			"recalled_at": now,
+		},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to recall message"})
+		return
+	}
+
+	// Broadcast recall event via Redis pub/sub
+	eventData := gin.H{
+		"message_id":  msgIDStr,
+		"sender_id":   userIDStr,
+		"receiver_id": msg.ReceiverID.Hex(),
+		"group_id":    msg.GroupID.Hex(),
+		"is_recalled": true,
+	}
+
+	wsMsg := WSMessage{
+		Event: "message_recall",
+		Data:  eventData,
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+
+	if msg.GroupID != primitive.NilObjectID {
+		// Broadcast to all group members
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": msg.GroupID}).Decode(&group)
+		if err == nil {
+			for _, mID := range group.Members {
+				db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
+			}
+		}
+	} else {
+		// Broadcast to receiver and sender
+		db.RedisClient.Publish(context.Background(), "user_messages:"+msg.ReceiverID.Hex(), wsMsgBytes)
+		db.RedisClient.Publish(context.Background(), "user_messages:"+userIDStr, wsMsgBytes)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Message recalled successfully"})
+}
+
+// EditMessage handles editing a message
+type EditMessageReq struct {
+	Content string `json:"content" binding:"required"`
+}
+
+func EditMessage(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	msgIDStr := c.Param("id")
+	msgID, err := primitive.ObjectIDFromHex(msgIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message ID"})
+		return
+	}
+
+	var req EditMessageReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("messages")
+
+	var msg models.Message
+	err = collection.FindOne(ctx, bson.M{"_id": msgID}).Decode(&msg)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Message not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Verify owner
+	if msg.SenderID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You can only edit your own messages"})
+		return
+	}
+
+	if msg.IsRecalled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot edit recalled messages"})
+		return
+	}
+
+	now := time.Now()
+	_, err = collection.UpdateOne(ctx, bson.M{"_id": msgID}, bson.M{
+		"$set": bson.M{
+			"content":    req.Content,
+			"is_edited":  true,
+			"updated_at": now,
+		},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to edit message"})
+		return
+	}
+
+	// Broadcast edit event
+	eventData := gin.H{
+		"message_id":  msgIDStr,
+		"content":     req.Content,
+		"sender_id":   userIDStr,
+		"receiver_id": msg.ReceiverID.Hex(),
+		"group_id":    msg.GroupID.Hex(),
+		"is_edited":   true,
+	}
+
+	wsMsg := WSMessage{
+		Event: "message_edit",
+		Data:  eventData,
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+
+	if msg.GroupID != primitive.NilObjectID {
+		// Broadcast to all group members
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": msg.GroupID}).Decode(&group)
+		if err == nil {
+			for _, mID := range group.Members {
+				db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
+			}
+		}
+	} else {
+		// Broadcast to receiver and sender
+		db.RedisClient.Publish(context.Background(), "user_messages:"+msg.ReceiverID.Hex(), wsMsgBytes)
+		db.RedisClient.Publish(context.Background(), "user_messages:"+userIDStr, wsMsgBytes)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Message edited successfully"})
 }

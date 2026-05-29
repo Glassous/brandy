@@ -49,9 +49,22 @@ export function DiskPage() {
   const [items, setItems] = useState<DiskItem[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
   const [usedSpace, setUsedSpace] = useState<number>(0);
-  const [limitSpace, setLimitSpace] = useState<number>(200 * 1024 * 1024); // 200M
+  const [limitSpace, setLimitSpace] = useState<number>(500 * 1024 * 1024); // Upgrade default to 500M
 
   const [loading, setLoading] = useState(false);
+
+  // Tabs for main view: drive vs trash
+  const [activeTab, setActiveTab] = useState<'drive' | 'trash'>('drive');
+  const [trashItems, setTrashItems] = useState<DiskItem[]>([]);
+
+  // Multi Selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Folder selector modal for move/copy
+  const [showFolderSelector, setShowFolderSelector] = useState<'move' | 'copy' | null>(null);
+  const [selectorFolderId, setSelectorFolderId] = useState<string | null>(null);
+  const [selectorItems, setSelectorItems] = useState<DiskItem[]>([]);
+  const [selectorBreadcrumbs, setSelectorBreadcrumbs] = useState<Breadcrumb[]>([]);
 
   // Modals state
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
@@ -80,7 +93,7 @@ export function DiskPage() {
       if (res.ok) {
         const data = await res.json();
         setUsedSpace(data.used_space || 0);
-        setLimitSpace(data.limit_space || 200 * 1024 * 1024);
+        setLimitSpace(data.limit_space || 500 * 1024 * 1024);
       }
     } catch { /* ignore */ }
   }, [token, getHeaders]);
@@ -122,12 +135,185 @@ export function DiskPage() {
     } catch { /* ignore */ }
   }, [token, getHeaders]);
 
+  // Fetch trash items
+  const fetchTrash = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash`, { headers: getHeaders() });
+      if (res.ok) {
+        setTrashItems(await res.json());
+      } else {
+        showToast('获取回收站失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，获取回收站失败', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [token, getHeaders, showToast]);
+
+  // Fetch items inside target selector folder
+  const fetchSelectorItems = useCallback(async (folderId: string | null) => {
+    try {
+      const url = `${API_BASE}/api/disk/items?parent_id=${folderId || 'root'}`;
+      const res = await fetch(url, { headers: getHeaders() });
+      if (res.ok) {
+        const data: DiskItem[] = await res.json();
+        // Exclude the selected items to prevent loops
+        setSelectorItems(data.filter(item => item.type === 'folder' && !selectedIds.has(item.id)));
+      }
+    } catch { /* ignore */ }
+  }, [getHeaders, selectedIds]);
+
+  const fetchSelectorBreadcrumbs = useCallback(async (folderId: string | null) => {
+    if (!folderId) {
+      setSelectorBreadcrumbs([]);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/folders/${folderId}/path`, {
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        setSelectorBreadcrumbs(await res.json());
+      }
+    } catch { /* ignore */ }
+  }, [getHeaders]);
+
   // Initial and reactive load
   useEffect(() => {
-    fetchItems(currentFolderId);
-    fetchBreadcrumbs(currentFolderId);
+    if (activeTab === 'drive') {
+      fetchItems(currentFolderId);
+      fetchBreadcrumbs(currentFolderId);
+    } else {
+      fetchTrash();
+    }
     fetchUsage();
-  }, [currentFolderId, fetchItems, fetchBreadcrumbs, fetchUsage]);
+  }, [currentFolderId, activeTab, fetchItems, fetchBreadcrumbs, fetchTrash, fetchUsage]);
+
+  useEffect(() => {
+    if (showFolderSelector) {
+      fetchSelectorItems(selectorFolderId);
+      fetchSelectorBreadcrumbs(selectorFolderId);
+    }
+  }, [showFolderSelector, selectorFolderId, fetchSelectorItems, fetchSelectorBreadcrumbs]);
+
+  // Clear Recycle Bin
+  const handleClearTrash = async () => {
+    if (!confirm('确定要清空回收站吗？此操作将永久删除所有文件，且不可恢复！')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash/clear`, {
+        method: 'POST',
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        showToast('回收站已清空', 'success');
+        fetchTrash();
+        fetchUsage();
+      } else {
+        showToast('清空回收站失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，操作失败', 'error');
+    }
+  };
+
+  // Restore Trashed Item
+  const handleRestore = async (itemId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash/${itemId}/restore`, {
+        method: 'POST',
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        showToast('项目已还原', 'success');
+        fetchTrash();
+        fetchUsage();
+      } else {
+        showToast('还原项目失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，操作失败', 'error');
+    }
+  };
+
+  // Permanent Delete
+  const handlePermanentDelete = async (itemId: string) => {
+    if (!confirm('确定要永久删除此项目吗？此操作不可恢复！')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash/${itemId}`, {
+        method: 'DELETE',
+        headers: getHeaders(),
+      });
+      if (res.ok) {
+        showToast('项目已永久删除', 'success');
+        fetchTrash();
+        fetchUsage();
+      } else {
+        showToast('永久删除失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，操作失败', 'error');
+    }
+  };
+
+  // Batch Delete (Move to Recycle Bin)
+  const handleBatchDelete = async () => {
+    if (!confirm(`确定要删除选中的 ${selectedIds.size} 个项目吗？如果是文件夹，其下所有子内容也将移入回收站。`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/items/batch-delete`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ item_ids: Array.from(selectedIds) }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('批量移入回收站成功', 'success');
+        setSelectedIds(new Set());
+        fetchItems(currentFolderId);
+        fetchUsage();
+      } else {
+        showToast(data.error || '批量删除失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，操作失败', 'error');
+    }
+  };
+
+  // Open folder tree selector modal
+  const handleOpenFolderSelector = (type: 'move' | 'copy') => {
+    setSelectorFolderId(null);
+    setShowFolderSelector(type);
+  };
+
+  // Confirm Move / Copy
+  const handleFolderSelectorConfirm = async () => {
+    if (!showFolderSelector) return;
+    const targetParentId = selectorFolderId || 'root';
+    const itemIds = Array.from(selectedIds);
+    const url = showFolderSelector === 'move' ? `${API_BASE}/api/disk/items/move` : `${API_BASE}/api/disk/items/copy`;
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ item_ids: itemIds, target_parent_id: targetParentId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(showFolderSelector === 'move' ? '移动成功' : '复制成功', 'success');
+        setShowFolderSelector(null);
+        setSelectedIds(new Set());
+        fetchItems(currentFolderId);
+        fetchUsage();
+      } else {
+        showToast(data.error || '操作失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，操作失败', 'error');
+    }
+  };
 
   // Handle create folder
   const handleCreateFolder = async (e: React.FormEvent) => {
@@ -541,19 +727,19 @@ export function DiskPage() {
         }
 
         .disk-sidebar {
-          width: 300px;
+          width: 240px;
           height: 100%;
           border-right: 1px solid var(--border);
-          padding: 24px;
+          padding: 24px 16px;
           display: flex;
           flex-direction: column;
-          gap: 24px;
+          gap: 20px;
           flex-shrink: 0;
           background: var(--bg-paper);
         }
 
         .disk-sidebar-title {
-          font-size: 20px;
+          font-size: 16px;
           font-weight: 700;
           color: var(--text-primary);
         }
@@ -562,17 +748,17 @@ export function DiskPage() {
           background: var(--bg-card);
           border: 1px solid var(--border-light);
           border-radius: var(--radius);
-          padding: 16px;
+          padding: 14px;
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          gap: 10px;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
         }
 
         .usage-info {
           display: flex;
           justify-content: space-between;
-          font-size: 13px;
+          font-size: 12px;
           color: var(--text-secondary);
         }
 
@@ -608,6 +794,7 @@ export function DiskPage() {
           flex-direction: column;
           overflow: hidden;
           background: var(--bg-paper);
+          position: relative;
         }
 
         .disk-header {
@@ -654,7 +841,7 @@ export function DiskPage() {
 
         .list-header {
           display: grid;
-          grid-template-columns: 2fr 1fr 1fr 120px;
+          grid-template-columns: 40px 2fr 1fr 1fr 120px;
           padding: 8px 12px;
           border-bottom: 1px solid var(--border);
           font-size: 12px;
@@ -665,7 +852,7 @@ export function DiskPage() {
 
         .item-row {
           display: grid;
-          grid-template-columns: 2fr 1fr 1fr 120px;
+          grid-template-columns: 40px 2fr 1fr 1fr 120px;
           align-items: center;
           padding: 12px;
           border-bottom: 1px solid var(--border);
@@ -677,6 +864,10 @@ export function DiskPage() {
 
         .item-row:hover {
           background-color: var(--hover);
+        }
+
+        .item-row.selected {
+          background-color: var(--hover-light, rgba(0, 122, 255, 0.05));
         }
 
         .item-name-col {
@@ -844,6 +1035,9 @@ export function DiskPage() {
         }
 
         @media (max-width: 768px) {
+          .disk-sidebar {
+            display: none;
+          }
           .btn-text {
             display: none;
           }
@@ -1086,11 +1280,57 @@ export function DiskPage() {
         }
       `}</style>
 
+      {/* Sidebar for Navigation & Tabs */}
+      <div className="disk-sidebar">
+        <div className="disk-sidebar-title">文件整理</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <button
+            className={`btn ${activeTab === 'drive' ? '' : 'btn-secondary'}`}
+            style={{ justifyContent: 'flex-start', textAlign: 'left', width: '100%', padding: '10px 14px', borderRadius: '8px' }}
+            onClick={() => {
+              setActiveTab('drive');
+              setSelectedIds(new Set());
+            }}
+          >
+            📁 我的文件
+          </button>
+          <button
+            className={`btn ${activeTab === 'trash' ? '' : 'btn-secondary'}`}
+            style={{ justifyContent: 'flex-start', textAlign: 'left', width: '100%', padding: '10px 14px', borderRadius: '8px' }}
+            onClick={() => {
+              setActiveTab('trash');
+              setSelectedIds(new Set());
+            }}
+          >
+            🗑️ 回收站
+          </button>
+        </div>
+
+        <div className="usage-card" style={{ marginTop: 'auto' }}>
+          <div className="usage-info">
+            <span>已用容量</span>
+            <span className="usage-percent">{usagePercent.toFixed(1)}%</span>
+          </div>
+          <div className="progress-bar-container" title={`已使用 ${usagePercent.toFixed(1)}%`}>
+            <div
+              className="progress-bar-fill"
+              style={{
+                width: `${usagePercent}%`,
+                backgroundColor: getProgressColor(),
+              }}
+            />
+          </div>
+          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+            {formatBytes(usedSpace)} / {formatBytes(limitSpace)}
+          </span>
+        </div>
+      </div>
+
       {/* File Browser Panel occupies the main screen area */}
       <main className="disk-main">
         {/* Navigation Breadcrumbs Header & Space Usage & Controls */}
         <div className="disk-header">
-          {currentFolderId && (
+          {activeTab === 'drive' && currentFolderId && (
             <button
               className="back-btn"
               onClick={() => {
@@ -1099,6 +1339,7 @@ export function DiskPage() {
                 } else {
                   setCurrentFolderId(breadcrumbs[breadcrumbs.length - 2].id);
                 }
+                setSelectedIds(new Set());
               }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1109,25 +1350,31 @@ export function DiskPage() {
             </button>
           )}
 
-          <div className="breadcrumbs">
-            <span
-              className="breadcrumb-item"
-              onClick={() => setCurrentFolderId(null)}
-            >
-              根目录
-            </span>
-            {breadcrumbs.map((crumb) => (
-              <span key={crumb.id} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span className="breadcrumb-separator">/</span>
-                <span
-                  className="breadcrumb-item"
-                  onClick={() => setCurrentFolderId(crumb.id)}
-                >
-                  {crumb.name}
-                </span>
+          {activeTab === 'drive' ? (
+            <div className="breadcrumbs">
+              <span
+                className="breadcrumb-item"
+                onClick={() => { setCurrentFolderId(null); setSelectedIds(new Set()); }}
+              >
+                根目录
               </span>
-            ))}
-          </div>
+              {breadcrumbs.map((crumb) => (
+                <span key={crumb.id} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span className="breadcrumb-separator">/</span>
+                  <span
+                    className="breadcrumb-item"
+                    onClick={() => { setCurrentFolderId(crumb.id); setSelectedIds(new Set()); }}
+                  >
+                    {crumb.name}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ flex: 1, fontWeight: 700, fontSize: '15px', color: 'var(--text-primary)' }}>
+              回收站
+            </div>
+          )}
 
           {/* Horizontal Capacity Bar */}
           <div className="top-usage-container">
@@ -1147,30 +1394,42 @@ export function DiskPage() {
 
           {/* Operation Buttons */}
           <div className="header-actions">
-            <button className="btn" onClick={() => fileInputRef.current?.click()}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-              <span className="btn-text">上传文件</span>
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              style={{ display: 'none' }}
-              multiple
-              onChange={handleFileUpload}
-            />
+            {activeTab === 'drive' ? (
+              <>
+                <button className="btn" onClick={() => fileInputRef.current?.click()}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
+                  <span className="btn-text">上传文件</span>
+                </button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  style={{ display: 'none' }}
+                  multiple
+                  onChange={handleFileUpload}
+                />
 
-            <button className="btn btn-secondary" onClick={() => setShowNewFolderModal(true)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                <line x1="12" y1="11" x2="12" y2="17" />
-                <line x1="9" y1="14" x2="15" y2="14" />
-              </svg>
-              <span className="btn-text">新建文件夹</span>
-            </button>
+                <button className="btn btn-secondary" onClick={() => setShowNewFolderModal(true)}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    <line x1="12" y1="11" x2="12" y2="17" />
+                    <line x1="9" y1="14" x2="15" y2="14" />
+                  </svg>
+                  <span className="btn-text">新建文件夹</span>
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-danger" onClick={handleClearTrash} disabled={trashItems.length === 0}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 6h18" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                <span className="btn-text">清空回收站</span>
+              </button>
+            )}
 
             <button className="btn btn-secondary" onClick={() => setShowUploadList(prev => !prev)}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1194,7 +1453,7 @@ export function DiskPage() {
             <div className="empty-pane">
               <div>正在加载文件列表...</div>
             </div>
-          ) : items.length === 0 ? (
+          ) : activeTab === 'drive' && items.length === 0 ? (
             <div className="empty-pane">
               <svg className="empty-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 012.008 1.24l.885 1.77a2.25 2.25 0 002.007 1.24h1.98a2.25 2.25 0 002.007-1.24l.885-1.77a2.25 2.25 0 012.007-1.24h3.86m-18 0h18a2.25 2.25 0 012.25 2.25v4.25a2.25 2.25 0 01-2.25 2.25H2.25A2.25 2.25 0 010 20.25v-4.25A2.25 2.25 0 012.25 13.5z" />
@@ -1202,29 +1461,89 @@ export function DiskPage() {
               </svg>
               <div>当前文件夹为空</div>
             </div>
+          ) : activeTab === 'trash' && trashItems.length === 0 ? (
+            <div className="empty-pane">
+              <svg className="empty-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              <div>回收站为空</div>
+            </div>
           ) : (
             <>
               {/* Header Titles */}
-              <div className="list-header">
+              <div className="list-header" style={{ gridTemplateColumns: activeTab === 'trash' ? '2fr 1fr 1fr 160px' : '40px 2fr 1fr 1fr 120px' }}>
+                {activeTab === 'drive' && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={items.length > 0 && selectedIds.size === items.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedIds(new Set(items.map(item => item.id)));
+                        } else {
+                          setSelectedIds(new Set());
+                        }
+                      }}
+                      style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--brand-blue)' }}
+                    />
+                  </div>
+                )}
                 <div>名称</div>
                 <div>大小</div>
-                <div>修改日期</div>
+                <div>{activeTab === 'drive' ? '修改日期' : '删除日期'}</div>
                 <div style={{ textAlign: 'right' }}>操作</div>
               </div>
 
               {/* Rows */}
-              {items.map((item) => (
+              {(activeTab === 'drive' ? items : trashItems).map((item) => (
                 <div
                   key={item.id}
-                  className="item-row"
-                  onClick={() => {
-                    if (item.type === 'folder') {
-                      setCurrentFolderId(item.id);
-                    }
+                  className={`item-row ${selectedIds.has(item.id) ? 'selected' : ''}`}
+                  style={{ gridTemplateColumns: activeTab === 'trash' ? '2fr 1fr 1fr 160px' : '40px 2fr 1fr 1fr 120px' }}
+                  onClick={(e) => {
+                    if (activeTab === 'trash') return;
+                    e.stopPropagation();
+                    setSelectedIds(prev => {
+                      const next = new Set(prev);
+                      if (next.has(item.id)) {
+                        next.delete(item.id);
+                      } else {
+                        next.add(item.id);
+                      }
+                      return next;
+                    });
                   }}
                 >
+                  {/* Select Checkbox (Only in drive view) */}
+                  {activeTab === 'drive' && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={() => {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(item.id)) {
+                              next.delete(item.id);
+                            } else {
+                              next.add(item.id);
+                            }
+                            return next;
+                          });
+                        }}
+                        style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: 'var(--brand-blue)' }}
+                      />
+                    </div>
+                  )}
+
                   {/* Name Column */}
-                  <div className="item-name-col">
+                  <div className="item-name-col" onClick={(e) => {
+                    if (activeTab === 'drive' && item.type === 'folder') {
+                      e.stopPropagation();
+                      setCurrentFolderId(item.id);
+                      setSelectedIds(new Set());
+                    }
+                  }}>
                     {item.type === 'folder' ? (
                       <svg className="item-icon folder" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
@@ -1252,59 +1571,81 @@ export function DiskPage() {
 
                   {/* Action Buttons Column */}
                   <div className="item-actions-col" onClick={(e) => e.stopPropagation()}>
-                    {item.type === 'file' && (
+                    {activeTab === 'drive' ? (
                       <>
-                        {/* Download link */}
-                        <a href={item.url} target="_blank" rel="noopener noreferrer">
-                          <button className="action-icon-btn" title="下载">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                              <polyline points="7 10 12 15 17 10" />
-                              <line x1="12" y1="15" x2="12" y2="3" />
-                            </svg>
-                          </button>
-                        </a>
+                        {item.type === 'file' && (
+                          <>
+                            {/* Download link */}
+                            <a href={item.url} target="_blank" rel="noopener noreferrer">
+                              <button className="action-icon-btn" title="下载">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                  <polyline points="7 10 12 15 17 10" />
+                                  <line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                              </button>
+                            </a>
 
-                        {/* Copy URL */}
-                        {item.url && (
-                          <button className="action-icon-btn" title="复制链接" onClick={() => handleCopyLink(item.url!)}>
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                            </svg>
-                          </button>
+                            {/* Copy URL */}
+                            {item.url && (
+                              <button className="action-icon-btn" title="复制链接" onClick={() => handleCopyLink(item.url!)}>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                                </svg>
+                              </button>
+                            )}
+
+                            {/* Share */}
+                            <button className="action-icon-btn" title="分享给好友" onClick={() => { setShareTarget(item); setSelectedFriendId(friends[0]?.id || ''); }}>
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="18" cy="5" r="3" />
+                                <circle cx="6" cy="12" r="3" />
+                                <circle cx="18" cy="19" r="3" />
+                                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                              </svg>
+                            </button>
+                          </>
                         )}
 
-                        {/* Share */}
-                        <button className="action-icon-btn" title="分享给好友" onClick={() => { setShareTarget(item); setSelectedFriendId(friends[0]?.id || ''); }}>
+                        {/* Rename */}
+                        <button className="action-icon-btn" title="重命名" onClick={() => { setRenameTarget(item); setRenameValue(item.name); }}>
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="18" cy="5" r="3" />
-                            <circle cx="6" cy="12" r="3" />
-                            <circle cx="18" cy="19" r="3" />
-                            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
+                        </button>
+
+                        {/* Delete */}
+                        <button className="action-icon-btn delete" title="删除" onClick={() => handleDelete(item.id)}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                            <line x1="10" y1="11" x2="10" y2="17" />
+                            <line x1="14" y1="11" x2="14" y2="17" />
+                          </svg>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {/* Restore */}
+                        <button className="action-icon-btn" title="还原" onClick={() => handleRestore(item.id)} style={{ color: 'var(--brand-blue)' }}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="23 4 23 10 17 10" />
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                          </svg>
+                        </button>
+
+                        {/* Delete Permanently */}
+                        <button className="action-icon-btn delete" title="彻底删除" onClick={() => handlePermanentDelete(item.id)}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                           </svg>
                         </button>
                       </>
                     )}
-
-                    {/* Rename */}
-                    <button className="action-icon-btn" title="重命名" onClick={() => { setRenameTarget(item); setRenameValue(item.name); }}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                        <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                      </svg>
-                    </button>
-
-                    {/* Delete */}
-                    <button className="action-icon-btn delete" title="删除" onClick={() => handleDelete(item.id)}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                      </svg>
-                    </button>
                   </div>
                 </div>
               ))}
@@ -1544,6 +1885,119 @@ export function DiskPage() {
               <div className="modal-actions" style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', marginTop: '0' }}>
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShareTarget(null)}>关闭</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Selection Action Toolbar */}
+      {selectedIds.size > 0 && activeTab === 'drive' && (
+        <div className="floating-select-toolbar" style={{
+          position: 'absolute',
+          bottom: '24px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          boxShadow: '0 8px 30px rgba(0,0,0,0.15)',
+          borderRadius: '12px',
+          padding: '12px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '20px',
+          zIndex: 900
+        }}>
+          <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+            已选择 {selectedIds.size} 个项目
+          </span>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary btn-sm" onClick={() => handleOpenFolderSelector('move')}>
+              移动到
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => handleOpenFolderSelector('copy')}>
+              复制到
+            </button>
+            <button className="btn btn-danger btn-sm" onClick={handleBatchDelete}>
+              批量删除
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIds(new Set())}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Target Folder Selector Tree Browser */}
+      {showFolderSelector && (
+        <div className="modal-overlay" onClick={() => setShowFolderSelector(null)}>
+          <div className="modal-content" style={{ width: '460px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', margin: 0 }}>
+              {showFolderSelector === 'move' ? '选择移动目标目录' : '选择复制目标目录'}
+            </h3>
+            
+            {/* Modal breadcrumbs */}
+            <div className="breadcrumbs" style={{ padding: '12px 0', borderBottom: '1px solid var(--border-light)', overflowX: 'auto', flexShrink: 0 }}>
+              <span
+                className="breadcrumb-item"
+                style={{ fontSize: '13px' }}
+                onClick={() => setSelectorFolderId(null)}
+              >
+                根目录
+              </span>
+              {selectorBreadcrumbs.map((crumb) => (
+                <span key={crumb.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '13px' }}>
+                  <span className="breadcrumb-separator">/</span>
+                  <span
+                    className="breadcrumb-item"
+                    onClick={() => setSelectorFolderId(crumb.id)}
+                  >
+                    {crumb.name}
+                  </span>
+                </span>
+              ))}
+            </div>
+
+            {/* Folder list block */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0', minHeight: '180px', maxHeight: '300px' }}>
+              {selectorItems.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '36px 0', color: 'var(--text-secondary)', fontSize: '13px' }}>
+                  此目录下暂无可用子文件夹
+                </div>
+              ) : (
+                selectorItems.map(folder => (
+                  <div
+                    key={folder.id}
+                    onClick={() => setSelectorFolderId(folder.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '10px 12px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '13.5px',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                  >
+                    <svg className="item-icon folder" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ color: 'var(--brand-yellow)' }}>
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    </svg>
+                    <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{folder.name}</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Modal actions */}
+            <div className="modal-actions" style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', margin: 0, flexShrink: 0 }}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowFolderSelector(null)}>
+                取消
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={handleFolderSelectorConfirm}>
+                确定选择此目录
+              </button>
             </div>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../shared/Avatar';
 import { useApp, type Message } from '../../contexts/AppContext';
@@ -625,6 +625,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     friends,
     remarks,
     sendMessage,
+    sendQuoteMessage,
+    recallMessage,
+    editMessage,
     fetchGroupDetail,
     updateGroupName,
     addGroupMembers,
@@ -633,16 +636,25 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     removeGroupAdmin,
     addAIMember,
     getAIMembers,
-    removeAIMember
+    removeAIMember,
+    updateGroupAnnouncement,
+    dissolveGroup,
+    muteAllGroup,
+    muteGroupMember,
+    groupUpdateTrigger
   } = useApp();
   const { showToast } = useToast();
 
   const [tempMessages, setTempMessages] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, messageId: string, content: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, messageId: string, content: string, senderId: string, createdAt: string } | null>(null);
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+
+  // Edit / Quote State
+  const [editingMsg, setEditingMsg] = useState<Message | null>(null);
+  const [quotedMsg, setQuotedMsg] = useState<Message | null>(null);
 
   // Group Details & Settings Drawer State
   const [groupDetail, setGroupDetail] = useState<any>(null);
@@ -668,9 +680,14 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const [mentionQuery, setMentionQuery] = useState('');
   const mentionListRef = useRef<HTMLDivElement>(null);
 
-  // Load chat and fetch group info
+  // Initialize chat settings when switching channels
   useEffect(() => {
     onLoad(chatId, isGroup);
+    setShowGroupSettings(false);
+  }, [chatId, isGroup, onLoad]);
+
+  // Load chat and fetch group info
+  useEffect(() => {
     if (isGroup) {
       const getDetail = async () => {
         const detail = await fetchGroupDetail(chatId);
@@ -680,13 +697,11 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         setAIMembers(aiMembersList || []);
       };
       getDetail();
-      setShowGroupSettings(false);
     } else {
       setGroupDetail(null);
-      setShowGroupSettings(false);
       setAIMembers([]);
     }
-  }, [chatId, isGroup, onLoad, fetchGroupDetail, getAIMembers]);
+  }, [chatId, isGroup, fetchGroupDetail, getAIMembers, groupUpdateTrigger]);
 
   // useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
@@ -758,15 +773,58 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     return () => window.removeEventListener('click', handleCloseMenu);
   }, []);
 
-  const handleContextMenu = (e: React.MouseEvent, messageId: string, content: string) => {
+  const handleContextMenu = (e: React.MouseEvent, messageId: string, content: string, senderId: string, createdAt: string) => {
     e.preventDefault();
     if (isMultiSelect) return;
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
       messageId,
-      content
+      content,
+      senderId,
+      createdAt
     });
+  };
+
+  const handleEditSelect = (messageId: string) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (msg) {
+      setEditingMsg(msg);
+      setQuotedMsg(null);
+      setText(msg.content);
+      setContextMenu(null);
+    }
+  };
+
+  const handleQuoteSelect = (messageId: string) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (msg) {
+      setQuotedMsg({
+        ...msg,
+        sender_name: msg.sender_name || (msg.sender_id === currentUserId ? '我' : '对方')
+      });
+      setEditingMsg(null);
+      setContextMenu(null);
+    }
+  };
+
+  const handleReEdit = (content: string) => {
+    setText(content);
+  };
+
+  const isUserMuted = () => {
+    if (!isGroup || !groupDetail) return false;
+    if (groupDetail.owner_id === currentUserId) return false;
+    if (groupDetail.mute_all) return true;
+    if (groupDetail.muted_members && groupDetail.muted_members[currentUserId]) return true;
+    return false;
+  };
+
+  const handleToggleMute = async (userId: string, isMuted: boolean) => {
+    const ok = await muteGroupMember(chatId, userId, !isMuted);
+    if (ok) {
+      refreshGroupDetail();
+    }
   };
 
   const handleCopy = (content: string) => {
@@ -820,11 +878,31 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     }
   };
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim()) return;
-    onSend(chatId, text.trim());
-    setText('');
+
+    if (editingMsg) {
+      const ok = await editMessage(editingMsg.id, text.trim());
+      if (ok) {
+        setEditingMsg(null);
+        setText('');
+      }
+    } else if (quotedMsg) {
+      sendQuoteMessage(
+        chatId,
+        text.trim(),
+        quotedMsg.id,
+        quotedMsg.sender_name || '?',
+        quotedMsg.content,
+        isGroup
+      );
+      setQuotedMsg(null);
+      setText('');
+    } else {
+      onSend(chatId, text.trim());
+      setText('');
+    }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1505,6 +1583,69 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
             )}
           </button>
         </div>
+
+        {/* Group Announcement Static Banner */}
+        {isGroup && groupDetail?.announcement && (
+          <div className="group-announcement-banner" style={{
+            background: 'rgba(255, 193, 7, 0.08)',
+            borderBottom: '1px solid rgba(255, 193, 7, 0.15)',
+            padding: '10px 16px',
+            fontSize: '13px',
+            color: 'var(--text)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            flexShrink: 0
+          }}>
+            <span style={{ flexShrink: 0 }}>📢</span>
+            <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={groupDetail.announcement}>
+              {groupDetail.announcement}
+            </div>
+            {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <button 
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--brand-blue)',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                    fontWeight: 600
+                  }}
+                  onClick={() => {
+                    const ann = prompt("请输入新的群公告：", groupDetail.announcement || "");
+                    if (ann !== null) {
+                      updateGroupAnnouncement(chatId, ann.trim()).then(ok => {
+                        if (ok) refreshGroupDetail();
+                      });
+                    }
+                  }}
+                >
+                  修改
+                </button>
+                <button 
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--badge-unread)',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                    fontWeight: 600
+                  }}
+                  onClick={() => {
+                    if (confirm("确定要清除群公告吗？")) {
+                      updateGroupAnnouncement(chatId, "").then(ok => {
+                        if (ok) refreshGroupDetail();
+                      });
+                    }
+                  }}
+                >
+                  清除
+                </button>
+              </div>
+            )}
+          </div>
+        )}
  
         {/* Messages Scroll Area */}
         <div className="cr-msgs">
@@ -1585,8 +1726,53 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
             });
 
             return mappedMsgs.reverse().map(({ m, isOwn, isFirstOfGroup, senderNickname, senderAvatar, senderIsAI, showTime }) => {
+              if (m.is_recalled) {
+                const showReEdit = isOwn && !m.content.startsWith('{') && (Date.now() - new Date(m.created_at).getTime()) < 5 * 60 * 1000;
+                return (
+                  <div key={m.id} id={`msg-${m.id}`} className="msg-container" style={{ margin: '8px 0', alignItems: 'center' }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: 'var(--hover)',
+                      padding: '4px 12px',
+                      borderRadius: '12px',
+                      color: 'var(--text-dim)',
+                      fontSize: '12px',
+                      userSelect: 'none',
+                      gap: '8px'
+                    }}>
+                      <span>
+                        {isOwn ? "你撤回了一条消息" : (isGroup ? `${senderNickname || '某人'} 撤回了一条消息` : "对方撤回了一条消息")}
+                      </span>
+                      {showReEdit && (
+                        <button
+                          onClick={() => handleReEdit(m.content)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: 'var(--brand-blue)',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                            padding: 0,
+                            fontWeight: 600
+                          }}
+                        >
+                          重新编辑
+                        </button>
+                      )}
+                    </div>
+                    {showTime && (
+                      <div className="msg-time-container" style={{ marginTop: '6px' }}>
+                        {formatTime(m.created_at)}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
               return (
-                <div key={m.id} className="msg-container">
+                <div key={m.id} id={`msg-${m.id}`} className="msg-container">
                   <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
                     {isMultiSelect && (
                       <input
@@ -1652,13 +1838,49 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           return (
                             <div
                               className={`msg-bubble ${isOwn ? 'bubble-own' : 'bubble-other'} ${isFirstOfGroup ? 'first-of-group' : 'consecutive'}`}
-                              onContextMenu={(e) => handleContextMenu(e, m.id, m.content)}
+                              onContextMenu={(e) => handleContextMenu(e, m.id, m.content, m.sender_id, m.created_at)}
                               onClick={() => isMultiSelect && handleToggleSelect(m.id)}
                               style={bubbleStyle}
                             >
+                              {m.quote_id && (
+                                <div className="msg-quote-area" style={{
+                                  fontSize: '11px',
+                                  color: 'var(--text-dim)',
+                                  background: isOwn ? 'rgba(0, 0, 0, 0.05)' : 'rgba(255, 255, 255, 0.05)',
+                                  borderLeft: '2.5px solid var(--brand-blue)',
+                                  padding: '4px 8px',
+                                  marginBottom: '6px',
+                                  borderRadius: '3px',
+                                  opacity: 0.85,
+                                  wordBreak: 'break-all',
+                                  cursor: 'pointer'
+                                }} onClick={() => {
+                                  const el = document.getElementById(`msg-${m.quote_id}`);
+                                  if (el) {
+                                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    el.classList.add('highlight-flash');
+                                    setTimeout(() => el.classList.remove('highlight-flash'), 1500);
+                                  } else {
+                                    showToast('引用的消息在本地已不存在', 'info');
+                                  }
+                                }}>
+                                  <strong>{m.quote_sender_name}</strong>: {
+                                    m.quote_content?.startsWith('{') ? '[文件/媒体]' : m.quote_content
+                                  }
+                                </div>
+                              )}
                               {fileShareData && <FileShareCard fileShareData={fileShareData} isOwn={isOwn} />}
                               {chatFileData && <ChatFileCard data={chatFileData} />}
-                              {!fileShareData && !chatFileData && <span className="msg-text">{m.content}</span>}
+                              {!fileShareData && !chatFileData && (
+                                <span className="msg-text">
+                                  {m.content}
+                                  {m.is_edited && (
+                                    <span style={{ fontSize: '10px', opacity: 0.6, marginLeft: '6px', verticalAlign: 'middle', userSelect: 'none' }}>
+                                      (已编辑)
+                                    </span>
+                                  )}
+                                </span>
+                              )}
                             </div>
                           );
                         })()}
@@ -1772,8 +1994,85 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               </div>
             )}
             
+            {editingMsg && (
+              <div className="cr-input-preview-bar" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'between',
+                padding: '8px 16px',
+                background: 'var(--hover)',
+                borderTop: '1px solid var(--border)',
+                fontSize: '13px',
+                color: 'var(--text)',
+                gap: '12px'
+              }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  正在编辑消息: {editingMsg.content}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingMsg(null);
+                    setText('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--brand-blue)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    flexShrink: 0
+                  }}
+                >
+                  取消编辑
+                </button>
+              </div>
+            )}
+
+            {quotedMsg && (
+              <div className="cr-input-preview-bar" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'between',
+                padding: '8px 16px',
+                background: 'var(--hover)',
+                borderTop: '1px solid var(--border)',
+                fontSize: '13px',
+                color: 'var(--text)',
+                gap: '12px'
+              }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  引用 <strong>{quotedMsg.sender_name || '?'}</strong>: {quotedMsg.content.startsWith('{') ? '[文件/媒体]' : quotedMsg.content}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setQuotedMsg(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-dim)',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    padding: '0 4px',
+                    flexShrink: 0
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             <form onSubmit={handleSend} className="cr-input-bar">
-              <button type="button" className="btn btn-secondary" style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} title="发送文件/媒体">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUserMuted()}
+                title={isUserMuted() ? "禁言中" : "发送文件/媒体"}
+              >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
@@ -1786,8 +2085,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               />
               <input
                 type="text"
-                placeholder="输入消息... (输入@提及成员)"
+                placeholder={isUserMuted() ? (groupDetail?.mute_all ? "全体禁言中" : "您已被禁言") : "输入消息... (输入@提及成员)"}
                 value={text}
+                disabled={isUserMuted()}
                 onChange={e => {
                   setText(e.target.value);
                   // Detect @ mention
@@ -1819,7 +2119,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   }
                 }}
               />
-              <button type="submit" className="btn cr-send" disabled={!text.trim()}>
+              <button type="submit" className="btn cr-send" disabled={!text.trim() || isUserMuted()}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13" />
                   <polygon points="22 2 15 22 11 13 2 9 22 2" />
@@ -1846,6 +2146,67 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
             )}
           </div>
 
+          {/* Group Announcement Panel */}
+          <div className="cr-settings-section">
+            <div className="cr-settings-title">群公告</div>
+            {groupDetail.announcement ? (
+              <div style={{ fontSize: '13px', color: 'var(--text)', background: 'var(--hover)', padding: '10px', borderRadius: '6px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {groupDetail.announcement}
+              </div>
+            ) : (
+              <div style={{ fontSize: '12px', color: 'var(--text-dim)', fontStyle: 'italic' }}>暂无公告</div>
+            )}
+            {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+              <div style={{ display: 'flex', gap: '8px', marginTop: 8 }}>
+                <button
+                  className="btn btn-secondary"
+                  style={{ flex: 1, fontSize: 12, padding: '6px' }}
+                  onClick={() => {
+                    const ann = prompt("请输入新的群公告：", groupDetail.announcement || "");
+                    if (ann !== null) {
+                      updateGroupAnnouncement(chatId, ann.trim()).then(ok => {
+                        if (ok) refreshGroupDetail();
+                      });
+                    }
+                  }}
+                >
+                  修改公告
+                </button>
+                {groupDetail.announcement && (
+                  <button
+                    className="btn btn-danger"
+                    style={{ fontSize: 12, padding: '6px 12px' }}
+                    onClick={() => {
+                      if (confirm("确定要清除群公告吗？")) {
+                        updateGroupAnnouncement(chatId, "").then(ok => {
+                          if (ok) refreshGroupDetail();
+                        });
+                      }
+                    }}
+                  >
+                    删除
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Mute Control Panel */}
+          {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+            <div className="cr-settings-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>全体禁言</span>
+              <input
+                type="checkbox"
+                checked={!!groupDetail.mute_all}
+                onChange={async (e) => {
+                  const ok = await muteAllGroup(chatId, e.target.checked);
+                  if (ok) refreshGroupDetail();
+                }}
+                style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brand-blue)' }}
+              />
+            </div>
+          )}
+
           <div className="cr-settings-section">
             <div className="cr-settings-title">
               <span>群成员 ({groupDetail.members?.filter((m: any) => !m.is_ai).length || 0})</span>
@@ -1868,6 +2229,12 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                 const isMe = member.id === currentUserId;
                 const canKick = (groupDetail.owner_id === currentUserId && !isOwner) || (groupDetail.admins?.includes(currentUserId) && !isOwner && !isAdmin);
                 const canSetAdmin = groupDetail.owner_id === currentUserId && !isOwner;
+                
+                const isMuted = groupDetail.muted_members && !!groupDetail.muted_members[member.id];
+                const canMute = !isOwner && !isMe && (
+                  groupDetail.owner_id === currentUserId ||
+                  (groupDetail.admins?.includes(currentUserId) && !isAdmin)
+                );
 
                 return (
                   <div key={member.id} className="cr-settings-member-item">
@@ -1877,7 +2244,17 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                       {isOwner && <span className="member-badge badge-owner">群主</span>}
                       {isAdmin && <span className="member-badge badge-admin">管理员</span>}
                     </div>
-                    <div className="cr-settings-member-actions">
+                    <div className="cr-settings-member-actions" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      {canMute && (
+                        <button
+                          className="member-action-btn"
+                          title={isMuted ? "解除禁言" : "禁言"}
+                          onClick={() => handleToggleMute(member.id, isMuted)}
+                          style={{ fontSize: 12, color: isMuted ? 'var(--brand-yellow)' : 'var(--text-dim)' }}
+                        >
+                          {isMuted ? "🔊" : "🔇"}
+                        </button>
+                      )}
                       {canSetAdmin && (
                         <button
                           className="member-action-btn"
@@ -1955,14 +2332,29 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
             </div>
           </div>
 
-          <div className="cr-settings-section" style={{ marginTop: 'auto', borderBottom: 'none' }}>
-            <button
-              className="btn btn-danger"
-              style={{ width: '100%', borderRadius: 8, padding: '10px' }}
-              onClick={handleLeaveGroup}
-            >
-              退出群聊
-            </button>
+          <div className="cr-settings-section" style={{ marginTop: 'auto', borderBottom: 'none', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {groupDetail.owner_id === currentUserId ? (
+              <button
+                className="btn btn-danger"
+                style={{ width: '100%', borderRadius: 8, padding: '10px' }}
+                onClick={async () => {
+                  if (confirm("确定要解散该群聊吗？此操作不可撤销！")) {
+                    const ok = await dissolveGroup(chatId);
+                    if (ok) onBack?.();
+                  }
+                }}
+              >
+                解散群聊
+              </button>
+            ) : (
+              <button
+                className="btn btn-danger"
+                style={{ width: '100%', borderRadius: 8, padding: '10px' }}
+                onClick={handleLeaveGroup}
+              >
+                退出群聊
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -2097,6 +2489,24 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           <button className="cr-context-menu-item" onClick={() => handleForwardSingle(contextMenu.content)}>
             转发
           </button>
+          {!contextMenu.content.startsWith('{') && (
+            <button className="cr-context-menu-item" onClick={() => handleQuoteSelect(contextMenu.messageId)}>
+              引用
+            </button>
+          )}
+          {contextMenu.senderId === currentUserId && !contextMenu.content.startsWith('{') && (
+            <button className="cr-context-menu-item" onClick={() => handleEditSelect(contextMenu.messageId)}>
+              编辑
+            </button>
+          )}
+          {contextMenu.senderId === currentUserId && (Date.now() - new Date(contextMenu.createdAt).getTime()) < 5 * 60 * 1000 && (
+            <button className="cr-context-menu-item danger" onClick={() => {
+              recallMessage(contextMenu.messageId);
+              setContextMenu(null);
+            }}>
+              撤回
+            </button>
+          )}
           <button className="cr-context-menu-item" onClick={() => handleStartMultiSelect(contextMenu.messageId)}>
             多选
           </button>

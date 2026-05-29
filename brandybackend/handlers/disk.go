@@ -24,7 +24,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-const DiskLimit = 200 * 1024 * 1024 // 200MB in bytes
+const DiskLimit = 500 * 1024 * 1024 // 500MB in bytes
 
 // Helper to get COS Client
 func getCOSClient() (*cos.Client, string, string, string, error) {
@@ -64,7 +64,7 @@ func getAppIDFromBucket(bucket string) string {
 // Helper to calculate used space
 func calculateUsedSpace(ctx context.Context, userID primitive.ObjectID) (int64, error) {
 	collection := db.MongoDB.Collection("disk_items")
-	filter := bson.M{"user_id": userID, "type": "file"}
+	filter := bson.M{"user_id": userID, "type": "file", "is_deleted": bson.M{"$ne": true}}
 	cursor, err := collection.Find(ctx, filter)
 	if err != nil {
 		return 0, err
@@ -103,8 +103,9 @@ func GetDiskItems(c *gin.Context) {
 	defer cancel()
 
 	filter := bson.M{
-		"user_id":   userID,
-		"parent_id": parentFilter,
+		"user_id":    userID,
+		"parent_id":  parentFilter,
+		"is_deleted": bson.M{"$ne": true},
 	}
 
 	// Sort: folders first, then files, then sort by name/created_at
@@ -245,7 +246,7 @@ func GetUploadCredential(c *gin.Context) {
 	}
 
 	if usedSpace+req.Size > DiskLimit {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 200MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 500MB）"})
 		return
 	}
 
@@ -388,7 +389,7 @@ func CompleteUploadDiskFile(c *gin.Context) {
 	if usedSpace+actualSize > DiskLimit {
 		// Clean up the uploaded object on COS since it exceeds quota
 		_, _ = client.Object.Delete(ctx, req.CosKey)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 200MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 500MB）"})
 		return
 	}
 
@@ -490,7 +491,7 @@ func RenameDiskItem(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Rename successful"})
 }
 
-// 6. 删除文件或文件夹 (含级联删除逻辑)
+// 6. 删除文件或文件夹 (软删除到回收站)
 func DeleteDiskItem(c *gin.Context) {
 	userIDStr := c.GetString("userID")
 	userID, _ := primitive.ObjectIDFromHex(userIDStr)
@@ -502,7 +503,7 @@ func DeleteDiskItem(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	collection := db.MongoDB.Collection("disk_items")
@@ -518,39 +519,59 @@ func DeleteDiskItem(c *gin.Context) {
 		return
 	}
 
-	client, _, _, _, err := getCOSClient()
+	now := time.Now()
+	_, err = collection.UpdateOne(ctx, bson.M{"_id": itemID}, bson.M{
+		"$set": bson.M{
+			"is_deleted":       true,
+			"directly_deleted": true,
+			"deleted_at":       now,
+			"updated_at":       now,
+		},
+	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to soft delete item"})
 		return
 	}
 
-	if item.Type == "file" {
-		// Delete from COS
-		if item.CosKey != "" {
-			_, _ = client.Object.Delete(ctx, item.CosKey)
-		}
-		// Delete from MongoDB
-		_, err = collection.DeleteOne(ctx, bson.M{"_id": itemID})
+	if item.Type == "folder" {
+		err = softDeleteFolderRecursively(ctx, userID, itemID, now)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
-			return
-		}
-	} else {
-		// Recursive folder deletion
-		err = deleteFolderRecursively(ctx, client, userID, itemID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete folder content recursively"})
-			return
-		}
-		// Delete the folder itself
-		_, err = collection.DeleteOne(ctx, bson.M{"_id": itemID})
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete folder document"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to soft delete folder content recursively"})
 			return
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Item deleted successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Item moved to recycle bin successfully"})
+}
+
+func softDeleteFolderRecursively(ctx context.Context, userID primitive.ObjectID, folderID primitive.ObjectID, t time.Time) error {
+	collection := db.MongoDB.Collection("disk_items")
+	cursor, err := collection.Find(ctx, bson.M{"user_id": userID, "parent_id": folderID})
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var child models.DiskItem
+		if err := cursor.Decode(&child); err != nil {
+			continue
+		}
+
+		_, _ = collection.UpdateOne(ctx, bson.M{"_id": child.ID}, bson.M{
+			"$set": bson.M{
+				"is_deleted":       true,
+				"directly_deleted": false,
+				"deleted_at":       t,
+				"updated_at":       t,
+			},
+		})
+
+		if child.Type == "folder" {
+			_ = softDeleteFolderRecursively(ctx, userID, child.ID, t)
+		}
+	}
+	return nil
 }
 
 func deleteFolderRecursively(ctx context.Context, client *cos.Client, userID primitive.ObjectID, folderID primitive.ObjectID) error {
@@ -798,7 +819,7 @@ func TransferDiskFile(c *gin.Context) {
 	}
 
 	if usedSpace+originItem.Size > DiskLimit {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "您的云盘空间不足（转存文件大小超过限额，限额200MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "您的云盘空间不足（转存文件大小超过限额，限额 500MB）"})
 		return
 	}
 
@@ -954,7 +975,7 @@ func SaveChatFileToDisk(c *gin.Context) {
 	}
 
 	if usedSpace+req.Size > DiskLimit {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "您的云盘空间不足（限额200MB）"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "您的云盘空间不足（限额 500MB）"})
 		return
 	}
 
@@ -1070,4 +1091,556 @@ func CheckChatTransferStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"transferred": true})
+}
+
+// 11. 获取回收站中的项目
+func GetTrashItems(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	filter := bson.M{
+		"user_id":          userID,
+		"is_deleted":       true,
+		"directly_deleted": true,
+	}
+
+	opts := options.Find().SetSort(bson.D{
+		{Key: "type", Value: -1},
+		{Key: "deleted_at", Value: -1},
+	})
+
+	cursor, err := db.MongoDB.Collection("disk_items").Find(ctx, filter, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var items []models.DiskItem = make([]models.DiskItem, 0)
+	if err := cursor.All(ctx, &items); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Decode failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, items)
+}
+
+// 12. 还原回收站中的项目
+func RestoreTrashItem(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	itemIDStr := c.Param("id")
+	itemID, err := primitive.ObjectIDFromHex(itemIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid item ID"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("disk_items")
+
+	// Verify ownership
+	var item models.DiskItem
+	err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID, "is_deleted": true}).Decode(&item)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found in trash"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+
+	// Restore the item itself
+	// If it has a parent, check if the parent itself is still deleted.
+	// If parent is deleted, move restored item to root (parent_id = nil) so it doesn't stay hidden!
+	var parentFilter *primitive.ObjectID = nil
+	if item.ParentID != nil {
+		var parent models.DiskItem
+		err = collection.FindOne(ctx, bson.M{"_id": *item.ParentID, "user_id": userID}).Decode(&parent)
+		if err == nil && !parent.IsDeleted {
+			parentFilter = item.ParentID
+		}
+	}
+
+	_, err = collection.UpdateOne(ctx, bson.M{"_id": itemID}, bson.M{
+		"$set": bson.M{
+			"is_deleted":       false,
+			"directly_deleted": false,
+			"deleted_at":       nil,
+			"parent_id":        parentFilter,
+			"updated_at":       time.Now(),
+		},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restore item"})
+		return
+	}
+
+	if item.Type == "folder" {
+		err = restoreFolderRecursively(ctx, userID, itemID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restore folder contents"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Item restored successfully"})
+}
+
+func restoreFolderRecursively(ctx context.Context, userID primitive.ObjectID, folderID primitive.ObjectID) error {
+	collection := db.MongoDB.Collection("disk_items")
+	cursor, err := collection.Find(ctx, bson.M{"user_id": userID, "parent_id": folderID})
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var child models.DiskItem
+		if err := cursor.Decode(&child); err != nil {
+			continue
+		}
+
+		_, _ = collection.UpdateOne(ctx, bson.M{"_id": child.ID}, bson.M{
+			"$set": bson.M{
+				"is_deleted":       false,
+				"directly_deleted": false,
+				"deleted_at":       nil,
+				"updated_at":       time.Now(),
+			},
+		})
+
+		if child.Type == "folder" {
+			_ = restoreFolderRecursively(ctx, userID, child.ID)
+		}
+	}
+	return nil
+}
+
+// 13. 彻底删除单个文件或文件夹 (物理删除)
+func DeleteTrashItem(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	itemIDStr := c.Param("id")
+	itemID, err := primitive.ObjectIDFromHex(itemIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid item ID"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("disk_items")
+
+	// Verify ownership
+	var item models.DiskItem
+	err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID, "is_deleted": true}).Decode(&item)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found in trash"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+
+	client, _, _, _, err := getCOSClient()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
+		return
+	}
+
+	if item.Type == "file" {
+		if item.CosKey != "" {
+			_, _ = client.Object.Delete(ctx, item.CosKey)
+		}
+		_, err = collection.DeleteOne(ctx, bson.M{"_id": itemID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Delete failed"})
+			return
+		}
+	} else {
+		err = deleteFolderRecursively(ctx, client, userID, itemID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete folder contents"})
+			return
+		}
+		_, err = collection.DeleteOne(ctx, bson.M{"_id": itemID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete folder record"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Item deleted permanently"})
+}
+
+// 14. 清空回收站
+func ClearTrash(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("disk_items")
+
+	// Find all directly deleted items in trash
+	cursor, err := collection.Find(ctx, bson.M{"user_id": userID, "is_deleted": true, "directly_deleted": true})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query trash"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	client, _, _, _, err := getCOSClient()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
+		return
+	}
+
+	for cursor.Next(ctx) {
+		var item models.DiskItem
+		if err := cursor.Decode(&item); err != nil {
+			continue
+		}
+
+		if item.Type == "file" {
+			if item.CosKey != "" {
+				_, _ = client.Object.Delete(ctx, item.CosKey)
+			}
+			_, _ = collection.DeleteOne(ctx, bson.M{"_id": item.ID})
+		} else {
+			_ = deleteFolderRecursively(ctx, client, userID, item.ID)
+			_, _ = collection.DeleteOne(ctx, bson.M{"_id": item.ID})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Recycle bin cleared successfully"})
+}
+
+// 15. 批量删除 (移入回收站)
+type BatchDeleteReq struct {
+	ItemIDs []string `json:"item_ids" binding:"required"`
+}
+
+func BatchDeleteDiskItems(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	var req BatchDeleteReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("disk_items")
+	now := time.Now()
+
+	for _, idStr := range req.ItemIDs {
+		itemID, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			continue
+		}
+
+		var item models.DiskItem
+		err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID}).Decode(&item)
+		if err != nil {
+			continue
+		}
+
+		_, err = collection.UpdateOne(ctx, bson.M{"_id": itemID}, bson.M{
+			"$set": bson.M{
+				"is_deleted":       true,
+				"directly_deleted": true,
+				"deleted_at":       now,
+				"updated_at":       now,
+			},
+		})
+		if err == nil && item.Type == "folder" {
+			_ = softDeleteFolderRecursively(ctx, userID, itemID, now)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Batch delete successful"})
+}
+
+// 16. 批量移动文件/文件夹
+type MoveItemsReq struct {
+	ItemIDs        []string `json:"item_ids" binding:"required"`
+	TargetParentID string   `json:"target_parent_id"` // can be empty or "root"
+}
+
+func MoveDiskItems(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	var req MoveItemsReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("disk_items")
+
+	var targetParent *primitive.ObjectID = nil
+	if req.TargetParentID != "" && req.TargetParentID != "root" {
+		tpid, err := primitive.ObjectIDFromHex(req.TargetParentID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target_parent_id"})
+			return
+		}
+		// Verify target parent exists and belongs to user
+		var parent models.DiskItem
+		err = collection.FindOne(ctx, bson.M{"_id": tpid, "user_id": userID, "type": "folder", "is_deleted": bson.M{"$ne": true}}).Decode(&parent)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Target parent directory not found"})
+			return
+		}
+		targetParent = &tpid
+	}
+
+	for _, idStr := range req.ItemIDs {
+		itemID, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			continue
+		}
+
+		// Prevent moving a folder into itself or its own subfolder
+		if targetParent != nil && itemID == *targetParent {
+			continue // skip
+		}
+		if targetParent != nil && isDescendantOf(ctx, userID, *targetParent, itemID) {
+			continue // skip to avoid recursive loop
+		}
+
+		_, _ = collection.UpdateOne(ctx, bson.M{"_id": itemID, "user_id": userID}, bson.M{
+			"$set": bson.M{
+				"parent_id":  targetParent,
+				"updated_at": time.Now(),
+			},
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Items moved successfully"})
+}
+
+// Check if a folder is a descendant of another folder
+func isDescendantOf(ctx context.Context, userID primitive.ObjectID, folderID primitive.ObjectID, ancestorID primitive.ObjectID) bool {
+	collection := db.MongoDB.Collection("disk_items")
+	currID := &folderID
+	for currID != nil {
+		if *currID == ancestorID {
+			return true
+		}
+		var item models.DiskItem
+		err := collection.FindOne(ctx, bson.M{"_id": *currID, "user_id": userID}).Decode(&item)
+		if err != nil {
+			break
+		}
+		currID = item.ParentID
+	}
+	return false
+}
+
+// 17. 批量复制文件/文件夹
+type CopyItemsReq struct {
+	ItemIDs        []string `json:"item_ids" binding:"required"`
+	TargetParentID string   `json:"target_parent_id"` // can be empty or "root"
+}
+
+func CopyDiskItems(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	var req CopyItemsReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	collection := db.MongoDB.Collection("disk_items")
+
+	var targetParent *primitive.ObjectID = nil
+	if req.TargetParentID != "" && req.TargetParentID != "root" {
+		tpid, err := primitive.ObjectIDFromHex(req.TargetParentID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target_parent_id"})
+			return
+		}
+		var parent models.DiskItem
+		err = collection.FindOne(ctx, bson.M{"_id": tpid, "user_id": userID, "type": "folder", "is_deleted": bson.M{"$ne": true}}).Decode(&parent)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Target parent directory not found"})
+			return
+		}
+		targetParent = &tpid
+	}
+
+	client, bucket, region, _, err := getCOSClient()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
+		return
+	}
+
+	// Keep track of how much size we're copying to check limit
+	var totalSizeToCopy int64 = 0
+	for _, idStr := range req.ItemIDs {
+		itemID, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			continue
+		}
+		var item models.DiskItem
+		err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID, "is_deleted": bson.M{"$ne": true}}).Decode(&item)
+		if err != nil {
+			continue
+		}
+		if item.Type == "file" {
+			totalSizeToCopy += item.Size
+		} else {
+			totalSizeToCopy += getFolderSize(ctx, userID, item.ID)
+		}
+	}
+
+	usedSpace, err := calculateUsedSpace(ctx, userID)
+	if err == nil {
+		if usedSpace+totalSizeToCopy > DiskLimit {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "复制失败，超出云盘存储空间限额（500MB）"})
+			return
+		}
+	}
+
+	for _, idStr := range req.ItemIDs {
+		itemID, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			continue
+		}
+
+		var item models.DiskItem
+		err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID, "is_deleted": bson.M{"$ne": true}}).Decode(&item)
+		if err != nil {
+			continue
+		}
+
+		if item.Type == "file" {
+			_ = copyFileRecord(ctx, client, bucket, region, userID, item, targetParent)
+		} else {
+			_ = copyFolderRecordRecursively(ctx, client, bucket, region, userID, item, targetParent)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Items copied successfully"})
+}
+
+func getFolderSize(ctx context.Context, userID primitive.ObjectID, folderID primitive.ObjectID) int64 {
+	collection := db.MongoDB.Collection("disk_items")
+	cursor, err := collection.Find(ctx, bson.M{"user_id": userID, "parent_id": folderID, "is_deleted": bson.M{"$ne": true}})
+	if err != nil {
+		return 0
+	}
+	defer cursor.Close(ctx)
+
+	var total int64 = 0
+	for cursor.Next(ctx) {
+		var child models.DiskItem
+		if err := cursor.Decode(&child); err == nil {
+			if child.Type == "file" {
+				total += child.Size
+			} else {
+				total += getFolderSize(ctx, userID, child.ID)
+			}
+		}
+	}
+	return total
+}
+
+func copyFileRecord(ctx context.Context, client *cos.Client, bucket, region string, userID primitive.ObjectID, fileItem models.DiskItem, targetParent *primitive.ObjectID) error {
+	collection := db.MongoDB.Collection("disk_items")
+
+	ext := strings.ToLower(filepath.Ext(fileItem.Name))
+	uuidStr := uuid.New().String()
+	destKey := fmt.Sprintf("disk/%s/%s%s", userID.Hex(), uuidStr, ext)
+	sourceURL := fmt.Sprintf("%s.cos.%s.myqcloud.com/%s", bucket, region, fileItem.CosKey)
+
+	// Copy COS object
+	_, _, err := client.Object.Copy(ctx, destKey, sourceURL, nil)
+	if err != nil {
+		return err
+	}
+
+	// Create new record with same URL layout
+	newURL := strings.Replace(fileItem.URL, fileItem.CosKey, destKey, 1)
+
+	newItem := models.DiskItem{
+		ID:        primitive.NewObjectID(),
+		UserID:    userID,
+		ParentID:  targetParent,
+		Name:      fileItem.Name,
+		Type:      "file",
+		Size:      fileItem.Size,
+		CosKey:    destKey,
+		URL:       newURL,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	_, err = collection.InsertOne(ctx, newItem)
+	return err
+}
+
+func copyFolderRecordRecursively(ctx context.Context, client *cos.Client, bucket, region string, userID primitive.ObjectID, folderItem models.DiskItem, targetParent *primitive.ObjectID) error {
+	collection := db.MongoDB.Collection("disk_items")
+
+	// Create folder record copy
+	newFolder := models.DiskItem{
+		ID:        primitive.NewObjectID(),
+		UserID:    userID,
+		ParentID:  targetParent,
+		Name:      folderItem.Name,
+		Type:      "folder",
+		Size:      0,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	_, err := collection.InsertOne(ctx, newFolder)
+	if err != nil {
+		return err
+	}
+
+	// Copy children
+	cursor, err := collection.Find(ctx, bson.M{"user_id": userID, "parent_id": folderItem.ID, "is_deleted": bson.M{"$ne": true}})
+	if err != nil {
+		return err
+	}
+	defer cursor.Close(ctx)
+
+	for cursor.Next(ctx) {
+		var child models.DiskItem
+		if err := cursor.Decode(&child); err == nil {
+			if child.Type == "file" {
+				_ = copyFileRecord(ctx, client, bucket, region, userID, child, &newFolder.ID)
+			} else {
+				_ = copyFolderRecordRecursively(ctx, client, bucket, region, userID, child, &newFolder.ID)
+			}
+		}
+	}
+
+	return nil
 }

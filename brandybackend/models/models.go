@@ -36,24 +36,38 @@ type FriendRequest struct {
 }
 
 type Message struct {
-	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	SenderID     primitive.ObjectID `bson:"sender_id" json:"sender_id"`
-	ReceiverID   primitive.ObjectID `bson:"receiver_id,omitempty" json:"receiver_id,omitempty"`
-	GroupID      primitive.ObjectID `bson:"group_id,omitempty" json:"group_id,omitempty"`
-	Content      string             `bson:"content" json:"content"`
-	IsRead       bool               `bson:"is_read" json:"is_read"`
-	SenderName   string             `bson:"sender_name,omitempty" json:"sender_name,omitempty"`
-	SenderAvatar string             `bson:"sender_avatar,omitempty" json:"sender_avatar,omitempty"`
-	CreatedAt    time.Time          `bson:"created_at" json:"created_at"`
+	ID               primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
+	SenderID         primitive.ObjectID  `bson:"sender_id" json:"sender_id"`
+	ReceiverID       primitive.ObjectID  `bson:"receiver_id,omitempty" json:"receiver_id,omitempty"`
+	GroupID          primitive.ObjectID  `bson:"group_id,omitempty" json:"group_id,omitempty"`
+	Content          string              `bson:"content" json:"content"`
+	IsRead           bool                `bson:"is_read" json:"is_read"`
+	SenderName       string              `bson:"sender_name,omitempty" json:"sender_name,omitempty"`
+	SenderAvatar     string              `bson:"sender_avatar,omitempty" json:"sender_avatar,omitempty"`
+	IsRecalled       bool                `bson:"is_recalled" json:"is_recalled"`
+	RecalledAt       *time.Time          `bson:"recalled_at,omitempty" json:"recalled_at,omitempty"`
+	IsEdited         bool                `bson:"is_edited" json:"is_edited"`
+	QuoteID          *primitive.ObjectID `bson:"quote_id,omitempty" json:"quote_id,omitempty"`
+	QuoteSenderName  string              `bson:"quote_sender_name,omitempty" json:"quote_sender_name,omitempty"`
+	QuoteContent     string              `bson:"quote_content,omitempty" json:"quote_content,omitempty"`
+	CreatedAt        time.Time           `bson:"created_at" json:"created_at"`
+}
+
+type MuteInfo struct {
+	MutedBy string    `bson:"muted_by" json:"muted_by"` // "owner" or "admin"
+	MutedAt time.Time `bson:"muted_at" json:"muted_at"`
 }
 
 type Group struct {
-	ID        primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
-	Name      string               `bson:"name" json:"name"`
-	OwnerID   primitive.ObjectID   `bson:"owner_id" json:"owner_id"`
-	Admins    []primitive.ObjectID `bson:"admins" json:"admins"`
-	Members   []primitive.ObjectID `bson:"members" json:"members"`
-	CreatedAt time.Time            `bson:"created_at" json:"created_at"`
+	ID           primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
+	Name         string               `bson:"name" json:"name"`
+	OwnerID      primitive.ObjectID   `bson:"owner_id" json:"owner_id"`
+	Admins       []primitive.ObjectID `bson:"admins" json:"admins"`
+	Members      []primitive.ObjectID `bson:"members" json:"members"`
+	Announcement string               `bson:"announcement" json:"announcement"`
+	MuteAll      bool                 `bson:"mute_all" json:"mute_all"`
+	MutedMembers map[string]MuteInfo  `bson:"muted_members,omitempty" json:"muted_members,omitempty"`
+	CreatedAt    time.Time            `bson:"created_at" json:"created_at"`
 }
 
 // REST request/response shapes helper
@@ -69,13 +83,16 @@ type UserResponse struct {
 }
 
 type GroupResponse struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	OwnerID   string             `json:"owner_id"`
-	Admins    []string           `json:"admins"`
-	Members   []UserResponse     `json:"members"`
-	AIMembers []AIMemberResponse `json:"ai_members,omitempty"`
-	CreatedAt time.Time          `json:"created_at"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	OwnerID      string             `json:"owner_id"`
+	Admins       []string           `json:"admins"`
+	Members      []UserResponse     `json:"members"`
+	AIMembers    []AIMemberResponse `json:"ai_members,omitempty"`
+	Announcement string             `json:"announcement"`
+	MuteAll      bool               `json:"mute_all"`
+	MutedMembers map[string]MuteInfo  `json:"muted_members,omitempty"`
+	CreatedAt    time.Time          `json:"created_at"`
 }
 
 type ChatSession struct {
@@ -102,18 +119,21 @@ type FriendResponse struct {
 }
 
 type DiskItem struct {
-	ID           primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
-	UserID       primitive.ObjectID  `bson:"user_id" json:"user_id"`
-	ParentID     *primitive.ObjectID `bson:"parent_id,omitempty" json:"parent_id"`
-	OriginItemID *primitive.ObjectID `bson:"origin_item_id,omitempty" json:"origin_item_id"`
-	Name         string              `bson:"name" json:"name"`
-	Type         string              `bson:"type" json:"type"`
-	Size         int64               `bson:"size,omitempty" json:"size"`
-	CosKey       string              `bson:"cos_key,omitempty" json:"cos_key"`
-	SourceCosKey string              `bson:"source_cos_key,omitempty" json:"source_cos_key"`
-	URL          string              `bson:"url,omitempty" json:"url"`
-	CreatedAt    time.Time           `bson:"created_at" json:"created_at"`
-	UpdatedAt    time.Time           `bson:"updated_at" json:"updated_at"`
+	ID              primitive.ObjectID  `bson:"_id,omitempty" json:"id"`
+	UserID          primitive.ObjectID  `bson:"user_id" json:"user_id"`
+	ParentID        *primitive.ObjectID `bson:"parent_id,omitempty" json:"parent_id"`
+	OriginItemID    *primitive.ObjectID `bson:"origin_item_id,omitempty" json:"origin_item_id"`
+	Name            string              `bson:"name" json:"name"`
+	Type            string              `bson:"type" json:"type"`
+	Size            int64               `bson:"size,omitempty" json:"size"`
+	CosKey          string              `bson:"cos_key,omitempty" json:"cos_key"`
+	SourceCosKey    string              `bson:"source_cos_key,omitempty" json:"source_cos_key"`
+	URL             string              `bson:"url,omitempty" json:"url"`
+	IsDeleted       bool                `bson:"is_deleted" json:"is_deleted"`
+	DirectlyDeleted bool                `bson:"directly_deleted" json:"directly_deleted"`
+	DeletedAt       *time.Time          `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
+	CreatedAt       time.Time           `bson:"created_at" json:"created_at"`
+	UpdatedAt       time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
 type AIMember struct {

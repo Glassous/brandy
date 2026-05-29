@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -239,13 +240,16 @@ func GetGroupDetail(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.GroupResponse{
-		ID:        group.ID.Hex(),
-		Name:      group.Name,
-		OwnerID:   group.OwnerID.Hex(),
-		Admins:    admins,
-		Members:   members,
-		AIMembers: aiMembers,
-		CreatedAt: group.CreatedAt,
+		ID:           group.ID.Hex(),
+		Name:         group.Name,
+		OwnerID:      group.OwnerID.Hex(),
+		Admins:       admins,
+		Members:      members,
+		AIMembers:    aiMembers,
+		Announcement: group.Announcement,
+		MuteAll:      group.MuteAll,
+		MutedMembers: group.MutedMembers,
+		CreatedAt:    group.CreatedAt,
 	})
 }
 
@@ -651,13 +655,19 @@ func GetGroupMessages(c *gin.Context) {
 	}
 
 	type MessageResponse struct {
-		ID           string    `json:"id"`
-		SenderID     string    `json:"sender_id"`
-		GroupID      string    `json:"group_id,omitempty"`
-		Content      string    `json:"content"`
-		SenderName   string    `json:"sender_name,omitempty"`
-		SenderAvatar string    `json:"sender_avatar,omitempty"`
-		CreatedAt    time.Time `json:"created_at"`
+		ID              string    `json:"id"`
+		SenderID        string    `json:"sender_id"`
+		GroupID         string    `json:"group_id,omitempty"`
+		Content         string    `json:"content"`
+		SenderName      string    `json:"sender_name,omitempty"`
+		SenderAvatar    string    `json:"sender_avatar,omitempty"`
+		IsRecalled      bool      `json:"is_recalled"`
+		RecalledAt      *time.Time`json:"recalled_at,omitempty"`
+		IsEdited        bool      `json:"is_edited"`
+		QuoteID         string    `json:"quote_id,omitempty"`
+		QuoteSenderName string    `json:"quote_sender_name,omitempty"`
+		QuoteContent    string    `json:"quote_content,omitempty"`
+		CreatedAt       time.Time `json:"created_at"`
 	}
 
 	// For compatibility/fallback, query users & AI members to populate missing names/avatars in history
@@ -690,14 +700,25 @@ func GetGroupMessages(c *gin.Context) {
 			}
 		}
 
+		quoteIDStr := ""
+		if m.QuoteID != nil {
+			quoteIDStr = m.QuoteID.Hex()
+		}
+
 		response = append(response, MessageResponse{
-			ID:           m.ID.Hex(),
-			SenderID:     m.SenderID.Hex(),
-			GroupID:      m.GroupID.Hex(),
-			Content:      m.Content,
-			SenderName:   sName,
-			SenderAvatar: sAvatar,
-			CreatedAt:    m.CreatedAt,
+			ID:              m.ID.Hex(),
+			SenderID:        m.SenderID.Hex(),
+			GroupID:         m.GroupID.Hex(),
+			Content:         m.Content,
+			SenderName:      sName,
+			SenderAvatar:    sAvatar,
+			IsRecalled:      m.IsRecalled,
+			RecalledAt:      m.RecalledAt,
+			IsEdited:        m.IsEdited,
+			QuoteID:         quoteIDStr,
+			QuoteSenderName: m.QuoteSenderName,
+			QuoteContent:    m.QuoteContent,
+			CreatedAt:       m.CreatedAt,
 		})
 	}
 
@@ -999,4 +1020,341 @@ func RemoveAIMember(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "AI member removed successfully"})
+}
+
+// 18. 修改群公告
+type UpdateAnnouncementReq struct {
+	Announcement string `json:"announcement"`
+}
+
+func UpdateGroupAnnouncement(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req UpdateAnnouncementReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Verify group and permissions (Owner or Admin)
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	}
+
+	isAuthorized := group.OwnerID == currentUserID
+	if !isAuthorized {
+		for _, adminID := range group.Admins {
+			if adminID == currentUserID {
+				isAuthorized = true
+				break
+			}
+		}
+	}
+
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can update announcement"})
+		return
+	}
+
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{"$set": bson.M{"announcement": req.Announcement}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update announcement"})
+		return
+	}
+
+	// Broadcast group update event to all members
+	eventData := gin.H{
+		"group_id":     groupIDStr,
+		"announcement": req.Announcement,
+	}
+	wsMsg := WSMessage{
+		Event: "group_announcement_update",
+		Data:  eventData,
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+	for _, mID := range group.Members {
+		db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Announcement updated successfully"})
+}
+
+// 19. 解散群聊
+func DissolveGroup(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Verify group exists and user is owner
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	}
+
+	if group.OwnerID != currentUserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only the group owner can dissolve the group"})
+		return
+	}
+
+	// Delete group document
+	_, err = db.MongoDB.Collection("groups").DeleteOne(ctx, bson.M{"_id": groupID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to dissolve group"})
+		return
+	}
+
+	// Delete all group messages
+	_, _ = db.MongoDB.Collection("messages").DeleteMany(ctx, bson.M{"group_id": groupID})
+
+	// Delete group AI members
+	_, _ = db.MongoDB.Collection("ai_members").DeleteMany(ctx, bson.M{"group_id": groupID})
+
+	// Broadcast group_dissolved to all members
+	eventData := gin.H{
+		"group_id": groupIDStr,
+	}
+	wsMsg := WSMessage{
+		Event: "group_dissolved",
+		Data:  eventData,
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+	for _, mID := range group.Members {
+		db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Group dissolved successfully"})
+}
+
+// 20. 全员禁言/解除全员禁言
+type MuteAllReq struct {
+	MuteAll bool `json:"mute_all"`
+}
+
+func MuteAllGroup(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req MuteAllReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Verify group and check if user is owner
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	}
+
+	if group.OwnerID != currentUserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only the group owner can manage mute all status"})
+		return
+	}
+
+	_, err = db.MongoDB.Collection("groups").UpdateOne(
+		ctx,
+		bson.M{"_id": groupID},
+		bson.M{"$set": bson.M{"mute_all": req.MuteAll}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update mute all status"})
+		return
+	}
+
+	// Broadcast group_mute_all event
+	eventData := gin.H{
+		"group_id": groupIDStr,
+		"mute_all": req.MuteAll,
+	}
+	wsMsg := WSMessage{
+		Event: "group_mute_all",
+		Data:  eventData,
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+	for _, mID := range group.Members {
+		db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Group mute all status updated successfully"})
+}
+
+// 21. 禁言/解除禁言特定成员
+type MuteMemberReq struct {
+	UserID string `json:"user_id" binding:"required"`
+	Mute   bool   `json:"mute"`
+}
+
+func MuteGroupMember(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	var req MuteMemberReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	currentUserIDStr := c.GetString("userID")
+	currentUserID, _ := primitive.ObjectIDFromHex(currentUserIDStr)
+
+	targetUserIDStr := req.UserID
+	targetUserID, err := primitive.ObjectIDFromHex(targetUserIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid target User ID"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Verify group
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID}).Decode(&group)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Group not found"})
+		return
+	}
+
+	// Determine roles
+	isOwner := group.OwnerID == currentUserID
+	isAdmin := false
+	for _, adminID := range group.Admins {
+		if adminID == currentUserID {
+			isAdmin = true
+			break
+		}
+	}
+
+	isTargetOwner := group.OwnerID == targetUserID
+
+	if !isOwner && !isAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can manage mutes"})
+		return
+	}
+
+	if req.Mute {
+		// Individual mute rules:
+		// Owner can mute anyone.
+		// Admin can only mute regular members (not owner, and not themselves).
+		if isAdmin {
+			if isTargetOwner {
+				c.JSON(http.StatusForbidden, gin.H{"error": "Administrators cannot mute the group owner"})
+				return
+			}
+			if targetUserID == currentUserID {
+				c.JSON(http.StatusForbidden, gin.H{"error": "Administrators cannot mute themselves"})
+				return
+			}
+		}
+
+		muterRole := "admin"
+		if isOwner {
+			muterRole = "owner"
+		}
+
+		// Update Group's MutedMembers map
+		if group.MutedMembers == nil {
+			group.MutedMembers = make(map[string]models.MuteInfo)
+		}
+
+		farFuture := time.Now().AddDate(100, 0, 0)
+		_, err = db.MongoDB.Collection("groups").UpdateOne(
+			ctx,
+			bson.M{"_id": groupID},
+			bson.M{"$set": bson.M{"muted_members." + targetUserIDStr: models.MuteInfo{
+				MutedBy: muterRole,
+				MutedAt: farFuture,
+			}}},
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to mute member"})
+			return
+		}
+
+	} else {
+		// Unmute rules:
+		muteDetails, ok := group.MutedMembers[targetUserIDStr]
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Member is not muted"})
+			return
+		}
+
+		// If target was muted by owner, only owner can unmute!
+		if muteDetails.MutedBy == "owner" && !isOwner {
+			c.JSON(http.StatusForbidden, gin.H{"error": "This member was muted by the group owner and can only be unmuted by the owner"})
+			return
+		}
+
+		_, err = db.MongoDB.Collection("groups").UpdateOne(
+			ctx,
+			bson.M{"_id": groupID},
+			bson.M{"$unset": bson.M{"muted_members." + targetUserIDStr: ""}},
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to unmute member"})
+			return
+		}
+	}
+
+	// Broadcast group_mute_member event
+	eventData := gin.H{
+		"group_id": groupIDStr,
+		"user_id":  targetUserIDStr,
+		"mute":     req.Mute,
+	}
+	wsMsg := WSMessage{
+		Event: "group_mute_member",
+		Data:  eventData,
+	}
+	wsMsgBytes, _ := json.Marshal(wsMsg)
+	for _, mID := range group.Members {
+		db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Member mute status updated successfully"})
 }

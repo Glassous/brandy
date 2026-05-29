@@ -8,6 +8,12 @@ export interface LocalMessage {
   sender_avatar?: string;
   created_at: string;
   friend_id?: string; // Helper field to easily query by friend ID
+  is_recalled?: boolean;
+  recalled_at?: string;
+  is_edited?: boolean;
+  quote_id?: string;
+  quote_sender_name?: string;
+  quote_content?: string;
 }
 
 export interface SyncState {
@@ -278,6 +284,17 @@ export class LocalChatDB {
       ids.forEach(id => {
         store.delete(id);
       });
+    });
+  }
+
+  getMessage(id: string): Promise<LocalMessage | null> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error("Database not open"));
+      const transaction = this.db.transaction(['messages'], 'readonly');
+      const store = transaction.objectStore('messages');
+      const request = store.get(id);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
     });
   }
 }

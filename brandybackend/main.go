@@ -104,6 +104,8 @@ func main() {
 		// Chat historical routes
 		api.GET("/chats", handlers.GetChats)
 		api.GET("/chats/:friend_id/messages", handlers.GetChatMessages)
+		api.POST("/chats/messages/:id/recall", handlers.RecallMessage)
+		api.PUT("/chats/messages/:id/edit", handlers.EditMessage)
 
 		// Group chat routes
 		api.POST("/groups", handlers.CreateGroup)
@@ -119,6 +121,10 @@ func main() {
 		api.GET("/groups/:group_id/ai-members", handlers.GetAIMembers)
 		api.PUT("/groups/:group_id/ai-members/:ai_id", handlers.UpdateAIMember)
 		api.DELETE("/groups/:group_id/ai-members/:ai_id", handlers.RemoveAIMember)
+		api.PUT("/groups/:group_id/announcement", handlers.UpdateGroupAnnouncement)
+		api.DELETE("/groups/:group_id/dissolve", handlers.DissolveGroup)
+		api.POST("/groups/:group_id/mute-all", handlers.MuteAllGroup)
+		api.POST("/groups/:group_id/mute-member", handlers.MuteGroupMember)
 
 		// Cloud Disk Routes
 		api.GET("/disk/items", handlers.GetDiskItems)
@@ -134,6 +140,13 @@ func main() {
 		api.POST("/disk/transfer", handlers.TransferDiskFile)
 		api.POST("/disk/save-chat-file", handlers.SaveChatFileToDisk)
 		api.GET("/disk/check-chat-transfer", handlers.CheckChatTransferStatus)
+		api.GET("/disk/trash", handlers.GetTrashItems)
+		api.POST("/disk/trash/:id/restore", handlers.RestoreTrashItem)
+		api.DELETE("/disk/trash/:id", handlers.DeleteTrashItem)
+		api.POST("/disk/trash/clear", handlers.ClearTrash)
+		api.POST("/disk/items/batch-delete", handlers.BatchDeleteDiskItems)
+		api.POST("/disk/items/move", handlers.MoveDiskItems)
+		api.POST("/disk/items/copy", handlers.CopyDiskItems)
 
 		// Chat Routes
 		api.POST("/chat/upload-credential", handlers.GetChatUploadCredential)

@@ -19,6 +19,12 @@ export interface Message {
   content: string;
   sender_name?: string;
   sender_avatar?: string;
+  is_recalled?: boolean;
+  recalled_at?: string;
+  is_edited?: boolean;
+  quote_id?: string;
+  quote_sender_name?: string;
+  quote_content?: string;
   created_at: string;
 }
 
@@ -60,11 +66,15 @@ interface AppCtx {
   friends: Friend[];
   friendRequests: FriendRequest[];
   messages: Message[];
+  groupUpdateTrigger: number;
   activeChatFriendId: string | null;
   setActiveChatFriendId: (id: string | null) => void;
   login: (token: string, user: User) => void;
   logout: () => void;
   sendMessage: (receiverId: string, content: string, isGroup?: boolean) => void;
+  sendQuoteMessage: (receiverId: string, content: string, quoteId: string, quoteSenderName: string, quoteContent: string, isGroup?: boolean) => void;
+  recallMessage: (messageId: string) => Promise<boolean>;
+  editMessage: (messageId: string, newContent: string) => Promise<boolean>;
   loadChatMessages: (friendId: string, isGroup?: boolean) => Promise<void>;
   addFriend: (username: string) => Promise<boolean>;
   handleFriendRequest: (requestId: string, status: 'accepted' | 'rejected') => Promise<void>;
@@ -96,6 +106,17 @@ interface AppCtx {
   addAIMember: (groupId: string, name: string, personality: string) => Promise<boolean>;
   getAIMembers: (groupId: string) => Promise<any[]>;
   removeAIMember: (groupId: string, aiId: string) => Promise<boolean>;
+  updateGroupAnnouncement: (groupId: string, announcement: string) => Promise<boolean>;
+  dissolveGroup: (groupId: string) => Promise<boolean>;
+  muteAllGroup: (groupId: string, muteAll: boolean) => Promise<boolean>;
+  muteGroupMember: (groupId: string, userId: string, mute: boolean) => Promise<boolean>;
+  fetchTrashItems: () => Promise<any[]>;
+  restoreTrashItem: (itemId: string) => Promise<boolean>;
+  deleteTrashItemPermanently: (itemId: string) => Promise<boolean>;
+  clearTrashPermanently: () => Promise<boolean>;
+  batchDeleteDiskItems: (itemIds: string[]) => Promise<boolean>;
+  moveDiskItems: (itemIds: string[], targetParentId: string) => Promise<boolean>;
+  copyDiskItems: (itemIds: string[], targetParentId: string) => Promise<boolean>;
 }
 
 const AppContext = createContext<AppCtx | null>(null);
@@ -127,6 +148,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [friends, setFriends] = useState<Friend[]>([]);
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [groupUpdateTrigger, setGroupUpdateTrigger] = useState(0);
 
   const [hiddenChats, setHiddenChats] = useState<string[]>([]);
   const [remarks, setRemarks] = useState<Record<string, string>>({});
@@ -523,6 +545,72 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [showToast]);
 
+  const sendQuoteMessage = useCallback((receiverId: string, content: string, quoteId: string, quoteSenderName: string, quoteContent: string, isGroup?: boolean) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        event: 'message',
+        data: isGroup ? {
+          group_id: receiverId,
+          content,
+          quote_id: quoteId,
+          quote_sender_name: quoteSenderName,
+          quote_content: quoteContent
+        } : {
+          receiver_id: receiverId,
+          content,
+          quote_id: quoteId,
+          quote_sender_name: quoteSenderName,
+          quote_content: quoteContent
+        },
+      }));
+    } else {
+      showToast('消息发送失败，正在重连...', 'error');
+    }
+  }, [showToast]);
+
+  const recallMessage = useCallback(async (messageId: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/chats/messages/${messageId}/recall`, {
+        method: 'POST',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('消息已撤回', 'success');
+        return true;
+      } else {
+        showToast(data.error || '撤回失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误，撤回失败', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const editMessage = useCallback(async (messageId: string, newContent: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/chats/messages/${messageId}/edit`, {
+        method: 'PUT',
+        headers: getHeaders,
+        body: JSON.stringify({ content: newContent }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('消息已修改', 'success');
+        return true;
+      } else {
+        showToast(data.error || '编辑失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误，编辑失败', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
   const createGroup = useCallback(async (name: string, members: string[]) => {
     if (!token) return null;
     try {
@@ -721,6 +809,233 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [token, getHeaders, showToast]);
 
+  const updateGroupAnnouncement = useCallback(async (groupId: string, announcement: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/announcement`, {
+        method: 'PUT',
+        headers: getHeaders,
+        body: JSON.stringify({ announcement }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('群公告已更新', 'success');
+        return true;
+      } else {
+        showToast(data.error || '更新失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const dissolveGroup = useCallback(async (groupId: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/dissolve`, {
+        method: 'DELETE',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('群聊已解散', 'success');
+        setActiveChatFriendId(null);
+        fetchChats();
+        return true;
+      } else {
+        showToast(data.error || '操作失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, fetchChats, showToast]);
+
+  const muteAllGroup = useCallback(async (groupId: string, muteAll: boolean): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/mute-all`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ mute_all: muteAll }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(muteAll ? '已开启全体禁言' : '已解除全体禁言', 'success');
+        return true;
+      } else {
+        showToast(data.error || '操作失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const muteGroupMember = useCallback(async (groupId: string, userId: string, mute: boolean): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${groupId}/mute-member`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ user_id: userId, mute }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(mute ? '已禁言该成员' : '已解除禁言', 'success');
+        return true;
+      } else {
+        showToast(data.error || '操作失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const fetchTrashItems = useCallback(async (): Promise<any[]> => {
+    if (!token) return [];
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash`, { headers: getHeaders });
+      if (res.ok) return await res.json();
+    } catch { /* ignore */ }
+    return [];
+  }, [token, getHeaders]);
+
+  const restoreTrashItem = useCallback(async (itemId: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash/${itemId}/restore`, {
+        method: 'POST',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('已还原文件', 'success');
+        return true;
+      } else {
+        showToast(data.error || '还原失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const deleteTrashItemPermanently = useCallback(async (itemId: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash/${itemId}`, {
+        method: 'DELETE',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('已彻底删除', 'success');
+        return true;
+      } else {
+        showToast(data.error || '删除失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const clearTrashPermanently = useCallback(async (): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/trash/clear`, {
+        method: 'POST',
+        headers: getHeaders,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('回收站已清空', 'success');
+        return true;
+      } else {
+        showToast(data.error || '清空失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const batchDeleteDiskItems = useCallback(async (itemIds: string[]): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/items/batch-delete`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ item_ids: itemIds }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('已移入回收站', 'success');
+        return true;
+      } else {
+        showToast(data.error || '删除失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const moveDiskItems = useCallback(async (itemIds: string[], targetParentId: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/items/move`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ item_ids: itemIds, target_parent_id: targetParentId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('移动成功', 'success');
+        return true;
+      } else {
+        showToast(data.error || '移动失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
+  const copyDiskItems = useCallback(async (itemIds: string[], targetParentId: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/items/copy`, {
+        method: 'POST',
+        headers: getHeaders,
+        body: JSON.stringify({ item_ids: itemIds, target_parent_id: targetParentId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('复制成功', 'success');
+        return true;
+      } else {
+        showToast(data.error || '复制失败', 'error');
+        return false;
+      }
+    } catch {
+      showToast('网络错误', 'error');
+      return false;
+    }
+  }, [token, getHeaders, showToast]);
+
   const login = useCallback((newToken: string, loggedUser: User) => {
     setToken(newToken);
     setUser(loggedUser);
@@ -874,6 +1189,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }
             }
             throttledFetchChats();
+          } else if (msg.event === 'message_recall') {
+            const data = msg.data;
+            const messageId = data.message_id;
+            setMessages(prev => prev.map(m => m.id === messageId ? { ...m, is_recalled: true, recalled_at: data.recalled_at || new Date().toISOString() } : m));
+            const db = localDbRef.current;
+            if (db) {
+              db.getMessage(messageId).then(m => {
+                if (m) {
+                  m.is_recalled = true;
+                  m.recalled_at = data.recalled_at || new Date().toISOString();
+                  db.saveMessages([m]).catch(err => console.error("Recall DB update failed", err));
+                }
+              });
+            }
+            throttledFetchChats();
+          } else if (msg.event === 'message_edit') {
+            const data = msg.data;
+            const messageId = data.message_id;
+            const content = data.content;
+            setMessages(prev => prev.map(m => m.id === messageId ? { ...m, content, is_edited: true } : m));
+            const db = localDbRef.current;
+            if (db) {
+              db.getMessage(messageId).then(m => {
+                if (m) {
+                  m.content = content;
+                  m.is_edited = true;
+                  db.saveMessages([m]).catch(err => console.error("Edit DB update failed", err));
+                }
+              });
+            }
+            throttledFetchChats();
+          } else if (msg.event === 'group_dissolved') {
+            const data = msg.data;
+            const dissolvedGroupId = data.group_id;
+            showToast('该群聊已解散', 'info');
+            if (activeChatFriendIdRef.current === dissolvedGroupId) {
+              setActiveChatFriendId(null);
+            }
+            fetchChats();
+          } else if (msg.event === 'group_mute_all' || msg.event === 'group_mute_member' || msg.event === 'group_announcement_update') {
+            setGroupUpdateTrigger(prev => prev + 1);
+            fetchChats();
+          } else if (msg.event === 'error') {
+            showToast(msg.data.message, 'error');
           }
         } catch { /* ignore */ }
       };
@@ -918,8 +1277,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={{
       token, user, chats, friends, friendRequests, messages,
-      activeChatFriendId, setActiveChatFriendId,
-      login, logout, sendMessage, loadChatMessages,
+      activeChatFriendId, setActiveChatFriendId, groupUpdateTrigger,
+      login, logout, sendMessage, sendQuoteMessage, recallMessage, editMessage, loadChatMessages,
       addFriend, handleFriendRequest, deleteFriend, updateNickname, updateCustomTransferPath, startChat,
       fetchChats, fetchFriends, fetchFriendRequests,
       hiddenChats, remarks, pinnedChats, hideChat, updateRemark, togglePinChat,
@@ -938,6 +1297,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       addAIMember,
       getAIMembers,
       removeAIMember,
+      updateGroupAnnouncement,
+      dissolveGroup,
+      muteAllGroup,
+      muteGroupMember,
+      fetchTrashItems,
+      restoreTrashItem,
+      deleteTrashItemPermanently,
+      clearTrashPermanently,
+      batchDeleteDiskItems,
+      moveDiskItems,
+      copyDiskItems,
     }}>
       {children}
     </AppContext.Provider>
