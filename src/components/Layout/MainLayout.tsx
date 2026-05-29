@@ -28,8 +28,8 @@ export function MainLayout() {
 
         [data-theme="dark"] {
           --rail-bg: var(--bg-card);
-          --rail-active-pill: rgba(82, 136, 193, 0.2);
-          --rail-active-text: var(--primary);
+          --rail-active-pill: rgba(82, 136, 193, 0.18);
+          --rail-active-text: var(--text);
           --rail-inactive-text: var(--text-secondary);
           --rail-hover-pill: var(--hover);
           --rail-badge-bg: var(--badge-unread);

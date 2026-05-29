@@ -1,8 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApp } from '../contexts/AppContext';
 import { Avatar } from '../components/shared/Avatar';
 import { useToast } from '../components/shared/Toast';
+
+function getFirstLetter(name: string): string {
+  if (!name) return '#';
+  const ch = name.charAt(0);
+  if (/[A-Za-z]/.test(ch)) return ch.toUpperCase();
+  if (/[0-9]/.test(ch)) return '#';
+  if (/[\u4e00-\u9fff]/.test(ch)) {
+    const code = ch.charCodeAt(0) - 0x4e00;
+    const index = code % 26;
+    return String.fromCharCode(65 + index);
+  }
+  return '#';
+}
 
 export function ContactsPage() {
   const { friends, friendRequests, handleFriendRequest, startChat, remarks, updateRemark, deleteFriend, deleteLocalChatHistory } = useApp();
@@ -15,6 +28,43 @@ export function ContactsPage() {
   const location = useLocation();
   const state = location.state as { showDetailOfFriendId?: string } | null;
 
+  const groupedFriends = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    for (const f of friends) {
+      const remark = remarks[f.id];
+      const displayName = remark ? `${remark} (${f.nickname})` : f.nickname;
+      const letter = getFirstLetter(displayName);
+      if (!groups[letter]) groups[letter] = [];
+      groups[letter].push({ ...f, displayName });
+    }
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+      if (a === '#') return 1;
+      if (b === '#') return -1;
+      return a.localeCompare(b);
+    });
+    for (const key of sortedKeys) {
+      groups[key].sort((a, b) => a.displayName.localeCompare(b.displayName));
+    }
+    return { keys: sortedKeys, groups };
+  }, [friends, remarks]);
+
+  const availableLetters = useMemo(() => {
+    const all = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ#'.split('');
+    return all.map(l => ({ letter: l, available: groupedFriends.keys.includes(l) }));
+  }, [groupedFriends]);
+
+  // Handle Android/browser back button for sub-views
+  useEffect(() => {
+    const onPopState = () => {
+      if (currentView !== 'list') {
+        setCurrentView('list');
+        setSelectedFriend(null);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [currentView]);
+
   useEffect(() => {
     if (state?.showDetailOfFriendId) {
       const found = friends.find(f => f.id === state.showDetailOfFriendId) as any;
@@ -24,7 +74,7 @@ export function ContactsPage() {
           status: found.status || '开启新的一天！🌟'
         });
         setCurrentView('detail');
-        // Clear route state to prevent re-opening on manual navigation back
+        window.history.pushState({ view: 'detail' }, '');
         navigate(location.pathname, { replace: true, state: null });
       }
     }
@@ -56,6 +106,7 @@ export function ContactsPage() {
     };
     setSelectedFriend(detailedFriend);
     setCurrentView('detail');
+    window.history.pushState({ view: 'detail' }, '');
   };
 
   const handleSetRemark = () => {
@@ -213,6 +264,52 @@ export function ContactsPage() {
           color: var(--text-dim);
           font-size: 13px;
         }
+        .ct-letter-header {
+          padding: 8px 16px 4px;
+          font-size: 12px;
+          font-weight: 700;
+          color: var(--brand-blue);
+          background: var(--bg);
+          position: sticky;
+          top: 0;
+          z-index: 1;
+        }
+        .ct-count-footer {
+          text-align: center;
+          padding: 20px 16px;
+          font-size: 12px;
+          color: var(--text-dim);
+        }
+        .ct-az-index {
+          position: fixed;
+          right: 4px;
+          top: 50%;
+          transform: translateY(-50%);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          z-index: 10;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+        .ct-az-letter {
+          font-size: 10px;
+          font-weight: 600;
+          color: var(--brand-blue);
+          padding: 1px 4px;
+          cursor: pointer;
+          line-height: 1.4;
+          border-radius: 4px;
+          transition: background 0.15s;
+        }
+        .ct-az-letter:active {
+          background: var(--hover);
+        }
+        .ct-az-letter.disabled {
+          color: var(--border);
+          cursor: default;
+          pointer-events: none;
+        }
 
         /* Requests view styles */
         .ct-req-card {
@@ -308,7 +405,7 @@ export function ContactsPage() {
             <span className="ct-header-title">联系人</span>
             <div className="ct-header-actions">
               {friendRequests.length > 0 && (
-                <button className="ct-requests-badge-btn" onClick={() => setCurrentView('requests')} title="查看好友申请">
+                <button className="ct-requests-badge-btn" onClick={() => { setCurrentView('requests'); window.history.pushState({ view: 'requests' }, ''); }} title="查看好友申请">
                   <span>新申请</span>
                   <span className="ct-requests-badge-btn-count ct-badge-dot">{friendRequests.length}</span>
                 </button>
@@ -322,24 +419,44 @@ export function ContactsPage() {
             </div>
           </div>
 
-          <div className="ct-content">
-            <div className="ct-section-title">联系人列表 ({friends.length})</div>
+          <div className="ct-content" style={{ position: 'relative' }}>
             {friends.length === 0 ? (
               <div className="ct-empty">暂无联系人</div>
             ) : (
-              friends.map(f => {
-                const remark = remarks[f.id];
-                const displayName = remark ? `${remark} (${f.nickname})` : f.nickname;
-                return (
-                  <div key={f.id} className="ct-item" onClick={() => handleFriendClick(f)}>
-                    <Avatar name={displayName} url={f.avatar} size={40} />
-                    <div className="ct-item-info">
-                      <div className="ct-item-name">{displayName}</div>
-                      <div className="ct-item-sub">@{f.username}</div>
-                    </div>
+              <>
+                {groupedFriends.keys.map(letter => (
+                  <div key={letter} id={`section-${letter}`}>
+                    <div className="ct-letter-header">{letter}</div>
+                    {groupedFriends.groups[letter].map((f: any) => (
+                      <div key={f.id} className="ct-item" onClick={() => handleFriendClick(f)}>
+                        <Avatar name={f.displayName} url={f.avatar} size={40} />
+                        <div className="ct-item-info">
+                          <div className="ct-item-name">{f.displayName}</div>
+                          <div className="ct-item-sub">@{f.username}</div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                );
-              })
+                ))}
+                <div className="ct-count-footer">共 {friends.length} 位联系人</div>
+              </>
+            )}
+            {friends.length > 0 && (
+              <div className="ct-az-index">
+                {availableLetters.map(({ letter, available }) => (
+                  <span
+                    key={letter}
+                    className={`ct-az-letter ${available ? '' : 'disabled'}`}
+                    onClick={() => {
+                      if (available) {
+                        document.getElementById(`section-${letter}`)?.scrollIntoView({ behavior: 'smooth' });
+                      }
+                    }}
+                  >
+                    {letter}
+                  </span>
+                ))}
+              </div>
             )}
           </div>
         </>
@@ -350,7 +467,7 @@ export function ContactsPage() {
         <>
           <div className="ct-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button className="ct-back-btn" onClick={() => setCurrentView('list')} title="返回联系人列表">
+              <button className="ct-back-btn" onClick={() => navigate(-1)} title="返回">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="19" y1="12" x2="5" y2="12" />
                   <polyline points="12 19 5 12 12 5" />
@@ -388,7 +505,7 @@ export function ContactsPage() {
         <>
           <div className="ct-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <button className="ct-back-btn" onClick={() => setCurrentView('list')} title="返回联系人列表">
+              <button className="ct-back-btn" onClick={() => navigate(-1)} title="返回">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="19" y1="12" x2="5" y2="12" />
                   <polyline points="12 19 5 12 12 5" />

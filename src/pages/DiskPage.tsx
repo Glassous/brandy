@@ -192,6 +192,21 @@ export function DiskPage() {
     fetchUsage();
   }, [currentFolderId, activeTab, fetchItems, fetchBreadcrumbs, fetchTrash, fetchUsage]);
 
+  // Handle Android/browser back button for folder navigation
+  useEffect(() => {
+    const onPopState = () => {
+      if (currentFolderId !== null) {
+        if (breadcrumbs.length <= 1) {
+          setCurrentFolderId(null);
+        } else {
+          setCurrentFolderId(breadcrumbs[breadcrumbs.length - 2].id);
+        }
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [currentFolderId, breadcrumbs]);
+
   useEffect(() => {
     if (showFolderSelector) {
       fetchSelectorItems(selectorFolderId);
@@ -1342,7 +1357,6 @@ export function DiskPage() {
                 } else {
                   setCurrentFolderId(breadcrumbs[breadcrumbs.length - 2].id);
                 }
-                setSelectedIds(new Set());
               }}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1357,7 +1371,7 @@ export function DiskPage() {
             <div className="breadcrumbs">
               <span
                 className="breadcrumb-item"
-                onClick={() => { setCurrentFolderId(null); setSelectedIds(new Set()); }}
+                onClick={() => { setCurrentFolderId(null); }}
               >
                 根目录
               </span>
@@ -1366,7 +1380,7 @@ export function DiskPage() {
                   <span className="breadcrumb-separator">/</span>
                   <span
                     className="breadcrumb-item"
-                    onClick={() => { setCurrentFolderId(crumb.id); setSelectedIds(new Set()); }}
+                    onClick={() => { setCurrentFolderId(crumb.id); }}
                   >
                     {crumb.name}
                   </span>
@@ -1545,6 +1559,7 @@ export function DiskPage() {
                       e.stopPropagation();
                       setCurrentFolderId(item.id);
                       setSelectedIds(new Set());
+                      window.history.pushState({ folderId: item.id }, '');
                     }
                   }}>
                     {item.type === 'folder' ? (

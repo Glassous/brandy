@@ -222,6 +222,17 @@ export function MoreIcon({ size = 16, color = 'currentColor', ...props }: IconPr
   );
 }
 
+// ⋯ Horizontal Three Dots Icon
+export function HorizontalDotsIcon({ size = 16, color = 'currentColor', ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </svg>
+  );
+}
+
 // 📎 Attachment / Paperclip Icon
 export function AttachIcon({ size = 16, color = 'currentColor', ...props }: IconProps) {
   return (

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../shared/Avatar';
-import { CloseIcon, BackIcon, InviteIcon, MuteIcon, UnmuteIcon, AdminIcon, KickIcon, BotIcon } from '../shared/Icons';
+import { CloseIcon, BackIcon, InviteIcon, AdminIcon, KickIcon, BotIcon, HorizontalDotsIcon } from '../shared/Icons';
 import { useApp, type Message } from '../../contexts/AppContext';
 import { useToast } from '../shared/Toast';
 import { API_BASE } from '../../config';
@@ -678,6 +678,10 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const [aiName, setAIName] = useState('');
   const [aiPersonality, setAIPersonality] = useState('');
 
+  // Member Action Popover State
+  const [activeMemberMenuId, setActiveMemberMenuId] = useState<string | null>(null);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; right: number } | null>(null);
+
   // Mention List State
   const [showMentionList, setShowMentionList] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -688,6 +692,17 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     onLoad(chatId, isGroup);
     setShowGroupSettings(false);
   }, [chatId, isGroup, onLoad]);
+
+  // Handle Android/browser back button for group settings overlay
+  useEffect(() => {
+    const onPopState = () => {
+      if (showGroupSettings) {
+        setShowGroupSettings(false);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [showGroupSettings]);
 
   // Load chat and fetch group info
   useEffect(() => {
@@ -769,9 +784,13 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     return members;
   };
 
-  // Close context menu on click elsewhere
+  // Close context menu and member popover on click elsewhere
   useEffect(() => {
-    const handleCloseMenu = () => setContextMenu(null);
+    const handleCloseMenu = () => {
+      setContextMenu(null);
+      setActiveMemberMenuId(null);
+      setPopoverPos(null);
+    };
     window.addEventListener('click', handleCloseMenu);
     return () => window.removeEventListener('click', handleCloseMenu);
   }, []);
@@ -875,7 +894,10 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
   const handleShowDetails = () => {
     if (isGroup) {
-      setShowGroupSettings(prev => !prev);
+      setShowGroupSettings(prev => {
+        if (!prev) window.history.pushState({ view: 'groupSettings' }, '');
+        return !prev;
+      });
     } else {
       navigate('/contacts', { state: { showDetailOfFriendId: chatId } });
     }
@@ -1183,13 +1205,8 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           .cr-input-bar {
             padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
           }
-          .cr-settings-sidebar {
-            position: fixed;
-            right: 0;
-            top: 0;
-            bottom: 0;
-            z-index: 1500;
-            box-shadow: -4px 0 16px rgba(0,0,0,0.15);
+          .cr-settings-panel {
+            max-width: 100%;
           }
         }
  
@@ -1457,16 +1474,35 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           opacity: 0.9;
         }
 
-        /* Group Settings Sidebar */
-        .cr-settings-sidebar {
-          width: 280px;
-          border-left: 1px solid var(--border);
+        /* Group Settings Overlay */
+        .cr-settings-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 500;
+          display: flex;
+          align-items: flex-start;
+          justify-content: flex-end;
+          animation: fadeIn 0.2s ease-out;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        .cr-settings-backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.45);
+        }
+        .cr-settings-panel {
+          position: relative;
+          width: 100%;
+          max-width: 560px;
+          height: 100%;
           background: var(--bg-paper);
           display: flex;
           flex-direction: column;
-          height: 100%;
           overflow-y: auto;
-          flex-shrink: 0;
+          box-shadow: -4px 0 24px rgba(0,0,0,0.2);
           animation: slideInRight 0.2s ease-out;
         }
         @keyframes slideInRight {
@@ -1557,6 +1593,102 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         .member-action-btn.danger:hover {
           color: var(--badge-unread);
         }
+        .member-menu-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 4px;
+          border-radius: 4px;
+          color: var(--text-dim);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .member-menu-btn:hover {
+          background: var(--hover);
+          color: var(--text);
+        }
+        .member-popover {
+          position: fixed;
+          z-index: 300;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+          padding: 6px 0;
+          min-width: 180px;
+          animation: popoverFadeIn 0.15s ease-out;
+        }
+        @keyframes popoverFadeIn {
+          from { opacity: 0; transform: translateY(-6px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .member-popover-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px;
+          font-size: 13px;
+          color: var(--text);
+          cursor: pointer;
+          transition: background 0.15s;
+          gap: 10px;
+          background: none;
+          border: none;
+          width: 100%;
+          text-align: left;
+        }
+        .member-popover-item:hover {
+          background: var(--hover);
+        }
+        .member-popover-item.danger {
+          color: var(--badge-unread);
+        }
+        .member-popover-item.danger:hover {
+          background: rgba(192, 57, 43, 0.08);
+        }
+        .member-popover-divider {
+          height: 1px;
+          background: var(--border);
+          margin: 4px 0;
+        }
+        .toggle-switch {
+          position: relative;
+          width: 36px;
+          height: 20px;
+          flex-shrink: 0;
+        }
+        .toggle-switch input {
+          opacity: 0;
+          width: 0;
+          height: 0;
+          position: absolute;
+        }
+        .toggle-slider {
+          position: absolute;
+          cursor: pointer;
+          inset: 0;
+          background: var(--border);
+          border-radius: 20px;
+          transition: background 0.2s;
+        }
+        .toggle-slider::before {
+          content: '';
+          position: absolute;
+          width: 16px;
+          height: 16px;
+          left: 2px;
+          bottom: 2px;
+          background: #fff;
+          border-radius: 50%;
+          transition: transform 0.2s;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+          background: var(--brand-blue);
+        }
+        .toggle-switch input:checked + .toggle-slider::before {
+          transform: translateX(16px);
+        }
       `}</style>
 
       {/* Main Chat Area */}
@@ -1574,10 +1706,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           <span className="cr-name">{chatName || '聊天'}</span>
           <button className="cr-info" title={isGroup ? "群设置" : "查看资料"} onClick={handleShowDetails}>
             {isGroup ? (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
+              <HorizontalDotsIcon size={20} />
             ) : (
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -1590,17 +1719,23 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         {/* Group Announcement Static Banner */}
         {isGroup && groupDetail?.announcement && (
           <div className="group-announcement-banner" style={{
-            background: 'rgba(255, 193, 7, 0.08)',
-            borderBottom: '1px solid rgba(255, 193, 7, 0.15)',
+            background: 'var(--hover)',
+            borderBottom: '1px solid var(--border)',
             padding: '10px 16px',
             fontSize: '13px',
             color: 'var(--text)',
             display: 'flex',
             alignItems: 'center',
             gap: '12px',
-            flexShrink: 0
+            flexShrink: 0,
+            borderLeft: '3px solid var(--brand-blue)',
           }}>
-            <span style={{ flexShrink: 0 }}>📢</span>
+            <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', color: 'var(--brand-blue)' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+            </span>
             <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={groupDetail.announcement}>
               {groupDetail.announcement}
             </div>
@@ -2134,9 +2269,11 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         )}
       </div>
 
-      {/* Group Settings Sidebar */}
+      {/* Group Settings Overlay */}
       {isGroup && showGroupSettings && groupDetail && (
-        <div className="cr-settings-sidebar">
+        <div className="cr-settings-overlay">
+          <div className="cr-settings-backdrop" onClick={() => setShowGroupSettings(false)} />
+          <div className="cr-settings-panel">
           {/* Settings Header with Back Button */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0, gap: 8 }}>
             <button
@@ -2253,46 +2390,82 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   (groupDetail.admins?.includes(currentUserId) && !isAdmin)
                 );
 
+                const hasActions = canMute || canSetAdmin || (canKick && !isMe);
+                const isMenuOpen = activeMemberMenuId === member.id;
+
                 return (
-                  <div key={member.id} className="cr-settings-member-item">
+                  <div key={member.id} className="cr-settings-member-item" style={{ position: 'relative' }}>
                     <div className="member-info">
                       <Avatar name={member.nickname} url={member.avatar} size={28} />
                       <span className="member-name">{member.nickname}</span>
                       {isOwner && <span className="member-badge badge-owner">群主</span>}
                       {isAdmin && <span className="member-badge badge-admin">管理员</span>}
                     </div>
-                    <div className="cr-settings-member-actions" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                      {canMute && (
-                        <button
-                          className="member-action-btn"
-                          title={isMuted ? "解除禁言" : "禁言"}
-                          onClick={() => handleToggleMute(member.id, isMuted)}
-                          style={{ display: 'flex', alignItems: 'center', color: isMuted ? 'var(--brand-yellow)' : 'var(--text-dim)' }}
-                        >
-                          {isMuted ? <UnmuteIcon size={15} /> : <MuteIcon size={15} />}
-                        </button>
-                      )}
-                      {canSetAdmin && (
-                        <button
-                          className="member-action-btn"
-                          title={isAdmin ? "取消管理员" : "设为管理员"}
-                          onClick={() => handleToggleAdmin(member.id, isAdmin)}
-                          style={{ display: 'flex', alignItems: 'center', color: isAdmin ? 'var(--brand-blue)' : 'var(--text-dim)' }}
-                        >
-                          <AdminIcon size={15} />
-                        </button>
-                      )}
-                      {canKick && !isMe && (
-                        <button
-                          className="member-action-btn danger"
-                          title="移出群聊"
-                          onClick={() => handleKickMember(member.id, member.nickname)}
-                          style={{ display: 'flex', alignItems: 'center' }}
-                        >
-                          <KickIcon size={14} />
-                        </button>
-                      )}
-                    </div>
+                    {hasActions && (
+                      <button
+                        className="member-menu-btn"
+                        title="更多操作"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isMenuOpen) {
+                            setActiveMemberMenuId(null);
+                            setPopoverPos(null);
+                          } else {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setActiveMemberMenuId(member.id);
+                            setPopoverPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                          }
+                        }}
+                      >
+                        <HorizontalDotsIcon size={16} />
+                      </button>
+                    )}
+                    {isMenuOpen && hasActions && (
+                      <div className="member-popover" style={popoverPos ? { top: popoverPos.top, right: popoverPos.right } : undefined} onClick={(e) => e.stopPropagation()}>
+                        {canMute && (
+                          <div className="member-popover-item">
+                            <span>禁言</span>
+                            <label className="toggle-switch">
+                              <input
+                                type="checkbox"
+                                checked={isMuted}
+                                onChange={() => {
+                                  handleToggleMute(member.id, isMuted);
+                                  setActiveMemberMenuId(null);
+                                }}
+                              />
+                              <span className="toggle-slider" />
+                            </label>
+                          </div>
+                        )}
+                        {canMute && (canSetAdmin || (canKick && !isMe)) && <div className="member-popover-divider" />}
+                        {canSetAdmin && (
+                          <button
+                            className="member-popover-item"
+                            onClick={() => {
+                              handleToggleAdmin(member.id, isAdmin);
+                              setActiveMemberMenuId(null);
+                            }}
+                          >
+                            <span>{isAdmin ? '取消管理员' : '设为管理员'}</span>
+                            <AdminIcon size={15} />
+                          </button>
+                        )}
+                        {canSetAdmin && (canKick && !isMe) && <div className="member-popover-divider" />}
+                        {canKick && !isMe && (
+                          <button
+                            className="member-popover-item danger"
+                            onClick={() => {
+                              handleKickMember(member.id, member.nickname);
+                              setActiveMemberMenuId(null);
+                            }}
+                          >
+                            <span>移出群聊</span>
+                            <KickIcon size={14} />
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2374,6 +2547,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                 退出群聊
               </button>
             )}
+          </div>
           </div>
         </div>
       )}
