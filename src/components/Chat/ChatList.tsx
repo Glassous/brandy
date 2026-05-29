@@ -15,7 +15,23 @@ interface ChatListProps {
 function formatTime(ts: string) {
   if (!ts) return '';
   const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const now = new Date();
+  
+  const isToday = d.toDateString() === now.toDateString();
+  
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  
+  if (isToday) {
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  } else if (isYesterday) {
+    return '昨天';
+  } else if (d.getFullYear() === now.getFullYear()) {
+    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  } else {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
 }
 
 function formatLastMessage(msg: string) {

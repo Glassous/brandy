@@ -175,8 +175,27 @@ function FileShareCard({ fileShareData, isOwn }: { fileShareData: FileShareData;
 }
 
 function formatTime(ts: string) {
+  if (!ts) return '';
   const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const now = new Date();
+  
+  const isToday = d.toDateString() === now.toDateString();
+  
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  
+  const timeStr = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  
+  if (isToday) {
+    return timeStr;
+  } else if (isYesterday) {
+    return `昨天 ${timeStr}`;
+  } else if (d.getFullYear() === now.getFullYear()) {
+    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${timeStr}`;
+  } else {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${timeStr}`;
+  }
 }
 
 interface ChatFileData {
@@ -669,7 +688,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     }
   }, [chatId, isGroup, onLoad, fetchGroupDetail, getAIMembers]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const refreshGroupDetail = async () => {
     if (isGroup) {
@@ -1098,7 +1117,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           overflow-y: auto;
           padding: 16px;
           display: flex;
-          flex-direction: column;
+          flex-direction: column-reverse;
           gap: 4px;
         }
         .msg-container {
@@ -1512,7 +1531,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               return <div className="cr-empty">打个招呼吧</div>;
             }
 
-            return allMsgs.map((m, i) => {
+            const mappedMsgs = allMsgs.map((m, i) => {
               const isOwn = m.sender_id === currentUserId;
               const isFirstOfGroup = i === 0 || allMsgs[i - 1].sender_id !== m.sender_id;
 
@@ -1546,7 +1565,19 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                 const nextMs = new Date(nextMsg.created_at).getTime();
                 showTime = (nextMs - currentMs) > 5 * 60 * 1000;
               }
-   
+
+              return {
+                m,
+                isOwn,
+                isFirstOfGroup,
+                senderNickname,
+                senderAvatar,
+                senderIsAI,
+                showTime
+              };
+            });
+
+            return mappedMsgs.reverse().map(({ m, isOwn, isFirstOfGroup, senderNickname, senderAvatar, senderIsAI, showTime }) => {
               return (
                 <div key={m.id} className="msg-container">
                   <div className={`msg-row ${isOwn ? 'msg-own' : 'msg-other'}`}>
