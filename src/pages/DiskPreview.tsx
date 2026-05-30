@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useCallback } from 'react';
 import type { DiskItem } from './DiskPage';
+import {
+  ArrowLeft, Download, X, FileAudio, File
+} from 'lucide-react';
 
 export interface DiskPreviewProps {
   file: DiskItem;
@@ -282,10 +285,7 @@ export default function DiskPreview({ file, fileList, currentIndex, onClose, onC
       {/* Top Bar */}
       <div className="dp-bar">
         <button className="dp-bar-back" onClick={onClose}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="19" y1="12" x2="5" y2="12" />
-            <polyline points="12 19 5 12 12 5" />
-          </svg>
+          <ArrowLeft size={14} />
           返回文件列表
         </button>
 
@@ -298,19 +298,12 @@ export default function DiskPreview({ file, fileList, currentIndex, onClose, onC
         <div className="dp-bar-actions">
           {file.url && (
             <a href={file.url} download={file.name} target="_blank" rel="noopener noreferrer" className="dp-btn">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
+              <Download size={13} />
               <span>下载</span>
             </a>
           )}
           <button className="dp-btn-close" onClick={onClose} title="关闭 (Esc)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <X size={15} />
           </button>
         </div>
       </div>
@@ -340,9 +333,7 @@ export default function DiskPreview({ file, fileList, currentIndex, onClose, onC
           {fileType === 'audio' && (
             <div className="dp-audio-card">
               <div className="dp-audio-icon">
-                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
-                </svg>
+                <FileAudio size={30} />
               </div>
               <span className="dp-card-name">{file.name}</span>
               <span className="dp-card-size">{formatBytes(file.size)}</span>
@@ -352,19 +343,13 @@ export default function DiskPreview({ file, fileList, currentIndex, onClose, onC
           {fileType === 'other' && (
             <div className="dp-other-card">
               <div className="dp-other-icon">
-                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><polyline points="13 2 13 9 20 9" />
-                </svg>
+                <File size={30} />
               </div>
               <span className="dp-card-name">{file.name}</span>
               <span className="dp-card-size">{formatBytes(file.size)}</span>
               {file.url && (
                 <a href={file.url} download={file.name} target="_blank" rel="noopener noreferrer" className="dp-btn" style={{ marginTop: '8px' }}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
+                  <Download size={13} />
                   下载文件
                 </a>
               )}
