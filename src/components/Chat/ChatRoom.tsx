@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar } from '../shared/Avatar';
 import { CloseIcon, BackIcon, InviteIcon, AdminIcon, KickIcon, BotIcon, HorizontalDotsIcon } from '../shared/Icons';
@@ -10,6 +10,8 @@ import { calculateContextMenuPosition, calculatePopoverPosition } from '../../ut
 import CloudFilePicker from './CloudFilePicker';
 import PendingFilesBar, { type PendingFile } from './PendingFilesBar';
 import ChatBundleCard from './ChatBundleCard';
+import MediaPreviewModal from './MediaPreviewModal';
+import { ChatMediaContext, type MediaItem } from './ChatMediaContext';
 
 interface ChatRoomProps {
   currentUserId: string;
@@ -214,360 +216,128 @@ interface ChatFileData {
   progress?: number;
 }
 
+export const getThumbnailUrl = (url: string, fileType: string) => {
+  if (!url) return '';
+  if (fileType !== 'image') return url;
+  if (url.startsWith('blob:')) return url;
+  if (url.includes('myqcloud.com') || url.includes('/api/chat/download') || url.startsWith('http')) {
+    if (url.includes('?')) {
+      return url.includes('imageMogr2') ? url : `${url}&imageMogr2/thumbnail/360x`;
+    }
+    return `${url}?imageMogr2/thumbnail/360x`;
+  }
+  return url;
+};
+
+// ── ChatFileCard ─────────────────────────────────────────────────────────────
+// Simplified: no local modal or transfer state — everything is handled by the
+// global MediaPreviewModal (via ChatMediaContext) which lives in ChatRoom.
 function ChatFileCard({ data }: { data: ChatFileData }) {
-  const { token } = useApp();
-  const { showToast } = useToast();
-  const [transferred, setTransferred] = useState(false);
-  const [checking, setChecking] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [showModal, setShowModal] = useState(false);
-
-  useEffect(() => {
-    if (data.uploading) {
-      setChecking(false);
-      return;
-    }
-    const checkStatus = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/disk/check-chat-transfer?cos_key=${encodeURIComponent(data.cos_key)}`, {
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        if (res.ok) {
-          const resData = await res.json();
-          setTransferred(resData.transferred);
-        }
-      } catch { /* ignore */ }
-      finally {
-        setChecking(false);
-      }
-    };
-    checkStatus();
-  }, [data.cos_key, data.uploading, token]);
-
-  const handleTransfer = async (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    if (saving || transferred) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/disk/save-chat-file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          filename: data.file_name,
-          size: data.file_size,
-          cos_key: data.cos_key
-        }),
-      });
-      const resData = await res.json();
-      if (res.ok) {
-        setTransferred(true);
-        showToast('已物理转存至您的云盘文件夹！', 'success');
-      } else {
-        showToast(resData.error || '转存失败', 'error');
-      }
-    } catch {
-      showToast('网络错误，转存失败', 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
+  const { openViewer } = React.useContext(ChatMediaContext);
 
   const formatBytes = (bytes: number, decimals = 1) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
   };
 
+  // ── Uploading states ──────────────────────────────────────────────────────
   if (data.uploading) {
-    // Image upload preview with centered loading animation
     if (data.file_type === 'image') {
       return (
         <div className="chat-file-bubble media-preview uploading" style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px' }}>
           <div style={{ position: 'relative', width: '220px', height: '180px' }}>
-            <img
-              src={data.url}
-              alt={data.file_name}
-              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', borderRadius: '8px', opacity: 0.7 }}
-            />
-            {/* Centered loading overlay */}
-            <div style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'rgba(0,0,0,0.4)',
-              borderRadius: '8px',
-              gap: '8px'
-            }}>
-              <div className="spinner" style={{
-                width: '32px',
-                height: '32px',
-                border: '3px solid rgba(255,255,255,0.3)',
-                borderTopColor: '#ffffff',
-                borderRadius: '50%',
-                animation: 'spin 1s linear infinite'
-              }}></div>
-              <span style={{ fontSize: '12px', color: '#ffffff', fontWeight: 500 }}>{data.progress || 0}%</span>
+            <img src={data.url} alt={data.file_name} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', borderRadius: '8px', opacity: 0.7 }} />
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', gap: '8px' }}>
+              <div style={{ width: 32, height: 32, border: '3px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+              <span style={{ fontSize: 12, color: '#fff', fontWeight: 500 }}>{data.progress || 0}%</span>
             </div>
           </div>
         </div>
       );
     }
-
-    // Video upload preview with centered loading animation
     if (data.file_type === 'video') {
       return (
         <div className="chat-file-bubble media-preview uploading" style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px', width: '260px', height: '200px' }}>
-          <video
-            src={data.url}
-            preload="metadata"
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.7 }}
-          />
-          {/* Centered loading overlay */}
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,0.4)',
-            borderRadius: '8px',
-            gap: '8px'
-          }}>
-            <div className="spinner" style={{
-              width: '32px',
-              height: '32px',
-              border: '3px solid rgba(255,255,255,0.3)',
-              borderTopColor: '#ffffff',
-              borderRadius: '50%',
-              animation: 'spin 1s linear infinite'
-            }}></div>
-            <span style={{ fontSize: '12px', color: '#ffffff', fontWeight: 500 }}>{data.progress || 0}%</span>
+          <video src={data.url} preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.7 }} />
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.4)', borderRadius: '8px', gap: '8px' }}>
+            <div style={{ width: 32, height: 32, border: '3px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+            <span style={{ fontSize: 12, color: '#fff', fontWeight: 500 }}>{data.progress || 0}%</span>
           </div>
         </div>
       );
     }
-
-    // Audio upload with simple loading state
+    // Audio / file uploading
     return (
       <div className="chat-file-bubble uploading" style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '200px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div className="spinner" style={{
-            width: '16px',
-            height: '16px',
-            border: '2px solid rgba(0,0,0,0.1)',
-            borderTopColor: 'var(--brand-blue)',
-            borderRadius: '50%',
-            animation: 'spin 1s linear infinite'
-          }}></div>
-          <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>正在发送 {data.file_name} ...</span>
+          <div style={{ width: 16, height: 16, border: '2px solid rgba(0,0,0,0.1)', borderTopColor: 'var(--brand-blue)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>正在发送 {data.file_name} ...</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ flex: 1, height: '4px', background: 'var(--border-light)', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ flex: 1, height: 4, background: 'var(--border-light)', borderRadius: 2, overflow: 'hidden' }}>
             <div style={{ width: `${data.progress || 0}%`, height: '100%', background: 'var(--brand-blue)', transition: 'width 0.1s' }} />
           </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{data.progress || 0}%</span>
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{data.progress || 0}%</span>
         </div>
       </div>
     );
   }
 
-  // Preview renderer
+  // ── Delivered states — open global viewer on click ─────────────────────────
   if (data.file_type === 'image') {
     return (
-      <div className="chat-file-bubble media-preview" style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px' }}>
-        <div style={{ position: 'relative', width: '220px', height: '180px', cursor: 'pointer' }} onClick={() => setShowModal(true)}>
+      <div
+        className="chat-file-bubble media-preview"
+        style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px', cursor: 'pointer' }}
+        onClick={() => openViewer(data.url)}
+      >
+        <div style={{ width: '220px', height: '180px' }}>
           <img
-            src={data.url}
+            src={getThumbnailUrl(data.url, 'image')}
             alt={data.file_name}
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', borderRadius: '8px' }}
           />
         </div>
-        
-        {/* Full Image Lightbox Modal */}
-        {showModal && (
-          <div className="modal-overlay" style={{ background: 'rgba(0,0,0,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 }} onClick={() => setShowModal(false)}>
-            <div style={{ position: 'relative', maxWidth: '85%', maxHeight: '85%' }} onClick={e => e.stopPropagation()}>
-              {/* Close Button */}
-              <button 
-                onClick={() => setShowModal(false)}
-                style={{
-                  position: 'absolute',
-                  top: '-40px',
-                  right: 0,
-                  background: 'none',
-                  border: 'none',
-                  color: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  outline: 'none'
-                }}
-                title="关闭"
-              >
-                <CloseIcon size={28} color="#ffffff" />
-              </button>
-              <img src={data.url} alt={data.file_name} style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '4px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)', display: 'block' }} />
-              <div style={{ position: 'absolute', bottom: '-40px', left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: '20px', color: '#fff', fontSize: '13px' }}>
-                <a href={data.url} download={data.file_name} target="_blank" rel="noopener noreferrer" style={{ color: 'fff', textDecoration: 'none', fontWeight: 600 }}>下载原图</a>
-                <span style={{ cursor: 'pointer', fontWeight: 600 }} onClick={handleTransfer}>{transferred ? '已转存至云盘' : (saving ? '转存中...' : '转存至云盘')}</span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
 
   if (data.file_type === 'video') {
     return (
-      <div className="chat-file-bubble media-preview" style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px', width: '260px', height: '200px' }}>
-        <div style={{ position: 'relative', width: '100%', height: '100%', cursor: 'pointer' }} onClick={() => setShowModal(true)}>
-          <video
-            src={data.url}
-            preload="metadata"
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-          />
-          {/* Centered play button */}
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0,0,0,0.3)',
-            transition: 'background 0.2s'
-          }}>
-            <div style={{
-              width: '48px',
-              height: '48px',
-              borderRadius: '50%',
-              background: 'rgba(0,0,0,0.6)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-            }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="#ffffff" stroke="none">
-                <polygon points="5 3 19 12 5 21 5 3" />
-              </svg>
-            </div>
+      <div
+        className="chat-file-bubble media-preview"
+        style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px', width: '260px', height: '200px', cursor: 'pointer' }}
+        onClick={() => openViewer(data.url)}
+      >
+        <video src={data.url} preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.3)' }}>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="#ffffff" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
           </div>
         </div>
-        
-        {/* Video Preview Modal */}
-        {showModal && (
-          <div className="modal-overlay" style={{ background: 'rgba(0,0,0,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 }} onClick={() => setShowModal(false)}>
-            <div style={{ position: 'relative', maxWidth: '85%', maxHeight: '85%' }} onClick={e => e.stopPropagation()}>
-              {/* Close Button */}
-              <button 
-                onClick={() => setShowModal(false)}
-                style={{
-                  position: 'absolute',
-                  top: '-40px',
-                  right: 0,
-                  background: 'none',
-                  border: 'none',
-                  color: '#ffffff',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  outline: 'none'
-                }}
-                title="关闭"
-              >
-                <CloseIcon size={28} color="#ffffff" />
-              </button>
-              <video
-                src={data.url}
-                controls
-                autoPlay
-                style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '4px', boxShadow: '0 4px 20px rgba(0,0,0,0.5)', display: 'block' }}
-              />
-              <div style={{ position: 'absolute', bottom: '-40px', left: 0, right: 0, display: 'flex', justifyContent: 'center', gap: '20px', color: '#fff', fontSize: '13px' }}>
-                <a href={data.url} download={data.file_name} target="_blank" rel="noopener noreferrer" style={{ color: '#fff', textDecoration: 'none', fontWeight: 600 }}>下载视频</a>
-                <span style={{ cursor: 'pointer', fontWeight: 600 }} onClick={handleTransfer}>{transferred ? '已转存至云盘' : (saving ? '转存中...' : '转存至云盘')}</span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
 
   if (data.file_type === 'audio') {
+    // Inline player stays; click on the label row opens viewer for download/save options
     return (
-      <div className="chat-file-bubble media-preview" style={{ minWidth: '240px', background: 'var(--hover)', borderRadius: '8px', padding: '8px 10px', cursor: 'pointer' }} onClick={() => setShowModal(true)}>
+      <div className="chat-file-bubble media-preview" style={{ minWidth: '240px', background: 'var(--hover)', borderRadius: '8px', padding: '8px 10px' }}>
         <audio src={data.url} controls style={{ width: '100%', height: '32px', display: 'block' }} />
-        
-        {/* Audio Preview Modal */}
-        {showModal && (
-          <div className="modal-overlay" style={{ background: 'rgba(0,0,0,0.85)', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 }} onClick={() => setShowModal(false)}>
-            <div className="modal-card" style={{ width: '360px' }} onClick={e => e.stopPropagation()}>
-              <div className="modal-header">
-                <span className="modal-title">音频详情</span>
-                <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowModal(false)}><CloseIcon size={20} /></button>
-              </div>
-              <div className="modal-body" style={{ textAlign: 'center', padding: '24px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-                <div style={{ color: 'var(--brand-blue)', marginBottom: '8px' }}>
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M9 18V5l12-2v13" />
-                    <circle cx="6" cy="18" r="3" />
-                    <circle cx="18" cy="16" r="3" />
-                  </svg>
-                </div>
-                <div style={{ fontWeight: 600, fontSize: '15px', wordBreak: 'break-all', color: 'var(--text)' }}>{data.file_name}</div>
-                <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>大小: {formatBytes(data.file_size)}</div>
-                <audio src={data.url} controls style={{ width: '100%', height: '40px', marginTop: '12px' }} />
-              </div>
-              <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <button className="btn btn-secondary" onClick={() => setShowModal(false)}>关闭</button>
-                <a href={data.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
-                  <button className="btn btn-secondary">下载</button>
-                </a>
-                {checking ? (
-                  <button className="btn btn-primary" disabled>检测中...</button>
-                ) : transferred ? (
-                  <button className="btn btn-primary" disabled>已转存</button>
-                ) : (
-                  <button className="btn btn-primary" onClick={handleTransfer} disabled={saving}>
-                    {saving ? '转存中...' : '转存至云盘'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
 
-  // Generic File - clicks open a details popup (弹窗) on web
+  // Generic file card
   return (
-    <div className="chat-file-bubble file-card" style={{ cursor: 'pointer', minWidth: '200px', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }} onClick={() => setShowModal(true)}>
+    <div
+      className="chat-file-bubble file-card"
+      style={{ cursor: 'pointer', minWidth: '200px', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}
+      onClick={() => openViewer(data.url)}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <div style={{ color: 'var(--brand-blue)' }}>
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -580,42 +350,6 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
           <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{formatBytes(data.file_size)}</span>
         </div>
       </div>
-
-      {showModal && (
-        <div className="modal-overlay" onClick={e => e.stopPropagation()}>
-          <div className="modal-card" style={{ width: '360px' }}>
-            <div className="modal-header">
-              <span className="modal-title">文件详情</span>
-              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowModal(false)}><CloseIcon size={20} /></button>
-            </div>
-            <div className="modal-body" style={{ textAlign: 'center', padding: '24px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-              <div style={{ color: 'var(--brand-blue)', marginBottom: '8px' }}>
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
-              </div>
-              <div style={{ fontWeight: 600, fontSize: '15px', wordBreak: 'break-all', color: 'var(--text)' }}>{data.file_name}</div>
-              <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>大小: {formatBytes(data.file_size)}</div>
-            </div>
-            <div className="modal-footer" style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setShowModal(false)}>关闭</button>
-              <a href={data.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
-                <button className="btn btn-secondary">下载</button>
-              </a>
-              {checking ? (
-                <button className="btn btn-primary" disabled>检测中...</button>
-              ) : transferred ? (
-                <button className="btn btn-primary" disabled>已转存</button>
-              ) : (
-                <button className="btn btn-primary" onClick={handleTransfer} disabled={saving}>
-                  {saving ? '转存中...' : '转存至云盘'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -694,12 +428,64 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   // Pending Files
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [sendMode, setSendMode] = useState<'independent' | 'combined'>('independent');
-  const [isSendingFiles, setIsSendingFiles] = useState(false);
 
   // Mention List State
   const [showMentionList, setShowMentionList] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const mentionListRef = useRef<HTMLDivElement>(null);
+
+  // ── Global Media Viewer ─────────────────────────────────────────────────────
+  // Collect all delivered media items (chat_file + chat_bundle files) in order.
+  const allChatMedia = useMemo<MediaItem[]>(() => {
+    const media: MediaItem[] = [];
+    for (const m of messages) {
+      if (!m.content?.startsWith('{')) continue;
+      try {
+        const parsed = JSON.parse(m.content);
+        if (parsed.type === 'chat_file' && !parsed.uploading && parsed.url) {
+          media.push({
+            url: parsed.url,
+            file_name: parsed.file_name,
+            file_size: parsed.file_size,
+            file_type: parsed.file_type as MediaItem['file_type'],
+            cos_key: parsed.cos_key,
+          });
+        } else if (parsed.type === 'chat_bundle' && Array.isArray(parsed.files)) {
+          for (const f of parsed.files) {
+            if (!f.uploading && f.url) {
+              media.push({
+                url: f.url,
+                file_name: f.file_name,
+                file_size: f.file_size,
+                file_type: f.file_type as MediaItem['file_type'],
+                cos_key: f.cos_key,
+              });
+            }
+          }
+        }
+      } catch { /* ignore malformed JSON */ }
+    }
+    return media;
+  }, [messages]);
+
+  // URL of the currently viewed media (null = viewer closed)
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+
+  const viewerIndex = useMemo(() => {
+    if (!viewerUrl) return 0;
+    const idx = allChatMedia.findIndex(m => m.url === viewerUrl);
+    return idx === -1 ? 0 : idx;
+  }, [viewerUrl, allChatMedia]);
+
+  const openMediaViewer = useCallback((url: string) => {
+    setViewerUrl(url);
+  }, []);
+
+  const handleViewerIndexChange = useCallback((idx: number) => {
+    if (idx >= 0 && idx < allChatMedia.length) {
+      setViewerUrl(allChatMedia[idx].url);
+    }
+  }, [allChatMedia]);
 
   // Initialize chat settings when switching channels
   useEffect(() => {
@@ -937,7 +723,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
     const textContent = text.trim();
 
-    if (textContent) {
+    if (textContent && (pendingFiles.length === 0 || sendMode === 'independent')) {
       if (quotedMsg) {
         sendQuoteMessage(chatId, textContent, quotedMsg.id, quotedMsg.sender_name || '?', quotedMsg.content, isGroup);
         setQuotedMsg(null);
@@ -950,45 +736,20 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
     if (pendingFiles.length === 0) return;
 
-    setIsSendingFiles(true);
+    const filesToSend = [...pendingFiles];
+    setPendingFiles([]); // Clear pending files immediately to release input area!
 
     if (sendMode === 'independent') {
-      for (const pf of pendingFiles) {
+      filesToSend.forEach(pf => {
         if (pf.source === 'local' && pf.file) {
-          await uploadAndSendSingleFile(pf);
+          uploadAndSendSingleFileBackground(pf);
         } else if (pf.source === 'cloud' && pf.cloudItem) {
           onSend(chatId, JSON.stringify({ type: 'file_share', ...pf.cloudItem }));
         }
-      }
-    } else {
-      const bundleFiles: any[] = [];
-      for (const pf of pendingFiles) {
-        if (pf.source === 'local' && pf.file) {
-          try {
-            setPendingFiles(prev => prev.map(p => p.id === pf.id ? { ...p, uploadStatus: 'uploading' as const, uploadProgress: 0 } : p));
-            const result = await uploadFileToCOS(pf.file, pf.fileType, pf.id);
-            setPendingFiles(prev => prev.map(p => p.id === pf.id ? { ...p, uploadStatus: 'done' as const } : p));
-            bundleFiles.push(result);
-          } catch (err: any) {
-            setPendingFiles(prev => prev.map(p => p.id === pf.id ? { ...p, uploadStatus: 'error' as const } : p));
-            showToast(`${pf.fileName} 上传失败: ${err.message || ''}`, 'error');
-            setIsSendingFiles(false);
-            return;
-          }
-        } else if (pf.source === 'cloud' && pf.cloudItem) {
-          bundleFiles.push({ ...pf.cloudItem, source: 'cloud' });
-        }
-      }
-      const bundleContent = JSON.stringify({
-        type: 'chat_bundle',
-        text: textContent || undefined,
-        files: bundleFiles
       });
-      onSend(chatId, bundleContent);
+    } else {
+      uploadAndSendBundleBackground(filesToSend, textContent);
     }
-
-    setPendingFiles([]);
-    setIsSendingFiles(false);
   };
 
   const addToPendingFiles = (files: FileList | File[]) => {
@@ -1021,7 +782,11 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     });
   };
 
-  const uploadFileToCOS = (file: File, fileType: string, pendingId: string): Promise<{ file_name: string; file_size: number; file_type: string; url: string; cos_key: string }> => {
+  const uploadFileToCOS = (
+    file: File,
+    fileType: string,
+    onProgressUpdate?: (percent: number) => void
+  ): Promise<{ file_name: string; file_size: number; file_type: string; url: string; cos_key: string }> => {
     return new Promise(async (resolve, reject) => {
       try {
         const credRes = await fetch(`${API_BASE}/api/chat/upload-credential`, {
@@ -1055,7 +820,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
           Body: file,
           onProgress: (progressData) => {
             const percent = Math.round((progressData.loaded / progressData.total) * 100);
-            setPendingFiles(prev => prev.map(p => p.id === pendingId ? { ...p, uploadProgress: percent } : p));
+            if (onProgressUpdate) onProgressUpdate(percent);
           }
         }, (err) => {
           if (err) reject(err);
@@ -1067,7 +832,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     });
   };
 
-  const uploadAndSendSingleFile = async (pf: PendingFile) => {
+  const uploadAndSendSingleFileBackground = (pf: PendingFile) => {
     if (!pf.file) return;
     const file = pf.file;
     const fileType = pf.fileType;
@@ -1081,57 +846,137 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       created_at: new Date().toISOString()
     }]);
 
-    try {
-      const credRes = await fetch(`${API_BASE}/api/chat/upload-credential`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ filename: file.name, size: file.size })
-      });
-      if (!credRes.ok) {
-        const errData = await credRes.json();
-        throw new Error(errData.error || '获取上传凭证失败');
-      }
-      const credData = await credRes.json();
-      const { credentials, bucket, region, cosKey, url } = credData;
-
-      const cos = new COS({
-        getAuthorization: (_options, callback) => {
-          callback({
-            TmpSecretId: credentials.tmpSecretId,
-            TmpSecretKey: credentials.tmpSecretKey,
-            SecurityToken: credentials.sessionToken,
-            StartTime: credData.startTime,
-            ExpiredTime: credData.expiredTime,
-          });
-        },
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        cos.uploadFile({
-          Bucket: bucket,
-          Region: region,
-          Key: cosKey,
-          Body: file,
-          onProgress: (progressData) => {
-            const percent = Math.round((progressData.loaded / progressData.total) * 100);
-            setTempMessages(prev => prev.map(m => {
-              if (m.id !== tempId) return m;
-              return { ...m, content: JSON.stringify({ type: 'chat_file', file_name: file.name, file_size: file.size, file_type: fileType, url: localUrl, cos_key: '', uploading: true, progress: percent }) };
-            }));
-          }
-        }, (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-
-      const finalContent = JSON.stringify({ type: 'chat_file', file_name: file.name, file_size: file.size, file_type: fileType, url, cos_key: cosKey });
+    uploadFileToCOS(file, fileType, (percent) => {
+      setTempMessages(prev => prev.map(m => {
+        if (m.id !== tempId) return m;
+        return { ...m, content: JSON.stringify({ type: 'chat_file', file_name: file.name, file_size: file.size, file_type: fileType, url: localUrl, cos_key: '', uploading: true, progress: percent }) };
+      }));
+    }).then((result) => {
+      const finalContent = JSON.stringify({ type: 'chat_file', file_name: result.file_name, file_size: result.file_size, file_type: result.file_type, url: result.url, cos_key: result.cos_key });
       onSend(chatId, finalContent);
       setTempMessages(prev => prev.filter(m => m.id !== tempId));
-    } catch (err: any) {
+    }).catch((err) => {
       showToast(`${file.name} 上传失败: ${err.message || ''}`, 'error');
       setTempMessages(prev => prev.filter(m => m.id !== tempId));
-    }
+    });
+  };
+
+  const uploadAndSendBundleBackground = (filesToSend: PendingFile[], textContent: string) => {
+    const tempId = `temp-bundle-${Math.random().toString(36).substring(2, 9)}-${Date.now()}`;
+    
+    const filesForTemp = filesToSend.map(pf => {
+      if (pf.source === 'local') {
+        return {
+          file_name: pf.fileName,
+          file_size: pf.fileSize,
+          file_type: pf.fileType,
+          url: pf.previewUrl,
+          uploading: true,
+          progress: 0,
+          id: pf.id
+        };
+      } else {
+        const cloudItem = pf.cloudItem;
+        return {
+          file_id: cloudItem?.file_id || '',
+          file_name: cloudItem?.file_name || pf.fileName,
+          file_size: cloudItem?.file_size || pf.fileSize,
+          file_type: pf.fileType,
+          url: cloudItem?.url || pf.previewUrl,
+          source: 'cloud'
+        };
+      }
+    });
+
+    setTempMessages(prev => [...prev, {
+      id: tempId,
+      sender_id: currentUserId,
+      content: JSON.stringify({
+        type: 'chat_bundle',
+        text: textContent || undefined,
+        files: filesForTemp,
+        uploading: true
+      }),
+      created_at: new Date().toISOString()
+    }]);
+
+    const uploadPromises = filesToSend.map(async (pf) => {
+      if (pf.source === 'local' && pf.file) {
+        try {
+          const result = await uploadFileToCOS(pf.file, pf.fileType, (percent) => {
+            setTempMessages(prev => prev.map(m => {
+              if (m.id !== tempId) return m;
+              try {
+                const parsed = JSON.parse(m.content);
+                const updatedFiles = parsed.files.map((f: any) => {
+                  if (f.id === pf.id) {
+                    return { ...f, progress: percent };
+                  }
+                  return f;
+                });
+                return { ...m, content: JSON.stringify({ ...parsed, files: updatedFiles }) };
+              } catch {
+                return m;
+              }
+            }));
+          });
+
+          setTempMessages(prev => prev.map(m => {
+            if (m.id !== tempId) return m;
+            try {
+              const parsed = JSON.parse(m.content);
+              const updatedFiles = parsed.files.map((f: any) => {
+                if (f.id === pf.id) {
+                  return {
+                    file_name: result.file_name,
+                    file_size: result.file_size,
+                    file_type: result.file_type,
+                    url: result.url,
+                    cos_key: result.cos_key,
+                    uploading: false,
+                    progress: 100
+                  };
+                }
+                return f;
+              });
+              return { ...m, content: JSON.stringify({ ...parsed, files: updatedFiles }) };
+            } catch {
+              return m;
+            }
+          }));
+
+          return result;
+        } catch (err: any) {
+          showToast(`${pf.fileName} 上传失败: ${err.message || ''}`, 'error');
+          throw err;
+        }
+      } else if (pf.source === 'cloud' && pf.cloudItem) {
+        return { ...pf.cloudItem, source: 'cloud' };
+      }
+      return null;
+    });
+
+    Promise.all(uploadPromises).then((results) => {
+      const finalFiles = results.filter(Boolean).map((r: any) => ({
+        file_name: r.file_name,
+        file_size: r.file_size,
+        file_type: r.file_type,
+        url: r.url,
+        cos_key: r.cos_key,
+        source: r.source || undefined,
+        file_id: r.file_id || undefined
+      }));
+
+      const bundleContent = JSON.stringify({
+        type: 'chat_bundle',
+        text: textContent || undefined,
+        files: finalFiles
+      });
+      onSend(chatId, bundleContent);
+      setTempMessages(prev => prev.filter(m => m.id !== tempId));
+    }).catch(() => {
+      setTempMessages(prev => prev.filter(m => m.id !== tempId));
+    });
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1145,7 +990,8 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     const items = e.clipboardData?.items;
     if (!items) return;
     const fileItems: File[] = [];
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       if (item.kind === 'file') {
         const file = item.getAsFile();
         if (file) fileItems.push(file);
@@ -1252,6 +1098,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   };
 
   return (
+    <ChatMediaContext.Provider value={{ openViewer: openMediaViewer }}>
     <div style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden', background: 'var(--bg)' }}>
       <style>{`
         .cr-main-area {
@@ -1310,7 +1157,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
             background: var(--hover);
           }
           .msg-bubble {
-            max-width: 85% !important;
+            max-width: 90% !important;
           }
           .cr-input-bar {
             padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
@@ -1905,7 +1752,17 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                   if (m.sender_id !== currentUserId) return false;
                   try {
                     const parsed = JSON.parse(m.content);
-                    return parsed.type === 'chat_file' && parsed.file_name === tempParsed.file_name && parsed.file_size === tempParsed.file_size;
+                    if (parsed.type === 'chat_file' && tempParsed.type === 'chat_file') {
+                      return parsed.file_name === tempParsed.file_name && parsed.file_size === tempParsed.file_size;
+                    }
+                    if (parsed.type === 'chat_bundle' && tempParsed.type === 'chat_bundle') {
+                      if (parsed.files?.length !== tempParsed.files?.length) return false;
+                      return parsed.files.every((pf: any, idx: number) => {
+                        const tpf = tempParsed.files[idx];
+                        return pf.file_name === tpf.file_name && pf.file_size === tpf.file_size;
+                      });
+                    }
+                    return false;
                   } catch {
                     return false;
                   }
@@ -2074,8 +1931,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                             } catch { /* ignore */ }
                           }
 
-                          const isMedia = (chatFileData && (chatFileData.file_type === 'image' || chatFileData.file_type === 'video')) ||
-                            (chatBundleData && chatBundleData.files?.length > 0 && chatBundleData.files.every((f: any) => f.file_type === 'image'));
+                          const isMedia = (chatFileData && (chatFileData.file_type === 'image' || chatFileData.file_type === 'video'));
                           const bubbleStyle = isMedia ? {
                             cursor: isMultiSelect ? 'pointer' : 'default',
                             maxWidth: '100%',
@@ -2323,7 +2179,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               sendMode={sendMode}
               onRemove={removePendingFile}
               onModeChange={setSendMode}
-              isSending={isSendingFiles}
+              isSending={false}
             />
 
             <form onSubmit={handleSend} className="cr-input-bar">
@@ -2947,5 +2803,16 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         </div>
       )}
     </div>
+
+    {/* Global media viewer — navigates across ALL chat media */}
+    {viewerUrl !== null && allChatMedia.length > 0 && (
+      <MediaPreviewModal
+        files={allChatMedia}
+        index={viewerIndex}
+        onIndexChange={handleViewerIndexChange}
+        onClose={() => setViewerUrl(null)}
+      />
+    )}
+    </ChatMediaContext.Provider>
   );
 }

@@ -186,3 +186,8 @@ button {
 
 .toast.success { border-left: 3px solid var(--brand-blue); }
 .toast.error   { border-left: 3px solid var(--badge-unread); }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

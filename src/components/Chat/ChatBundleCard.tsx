@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
+import { getThumbnailUrl } from './ChatRoom';
+import { useChatMedia } from './ChatMediaContext';
 
 interface BundleFile {
   file_name: string;
@@ -8,6 +10,8 @@ interface BundleFile {
   cos_key?: string;
   source?: string;
   file_id?: string;
+  uploading?: boolean;
+  progress?: number;
 }
 
 interface ChatBundleData {
@@ -47,260 +51,208 @@ function getFileIcon(fileName: string) {
 
 export default function ChatBundleCard({ data }: ChatBundleCardProps) {
   const { text, files } = data;
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const touchStartX = useRef(0);
-  const touchEndX = useRef(0);
-  const [showModal, setShowModal] = useState(false);
-  const [showIndex, setShowIndex] = useState(0);
+  const { openViewer } = useChatMedia();
 
-  const allImages = files.every(f => f.file_type === 'image');
+  // ── Carousel drag-to-scroll ──────────────────────────────────────────────
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragScrollLeft = useRef(0);
+  const hasDragged = useRef(false);
 
-  const goNext = useCallback(() => {
-    if (currentIndex < files.length - 1) setCurrentIndex(i => i + 1);
-  }, [currentIndex, files.length]);
+  const onMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!carouselRef.current) return;
+    isDragging.current = true;
+    hasDragged.current = false;
+    dragStartX.current = e.pageX - carouselRef.current.getBoundingClientRect().left;
+    dragScrollLeft.current = carouselRef.current.scrollLeft;
+    carouselRef.current.style.cursor = 'grabbing';
+  }, []);
 
-  const goPrev = useCallback(() => {
-    if (currentIndex > 0) setCurrentIndex(i => i - 1);
-  }, [currentIndex]);
+  const onMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isDragging.current || !carouselRef.current) return;
+    const x = e.pageX - carouselRef.current.getBoundingClientRect().left;
+    const walk = x - dragStartX.current;
+    if (Math.abs(walk) > 3) hasDragged.current = true;
+    carouselRef.current.scrollLeft = dragScrollLeft.current - walk;
+  }, []);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
-  };
+  const endDrag = useCallback(() => {
+    isDragging.current = false;
+    if (carouselRef.current) carouselRef.current.style.cursor = 'grab';
+    setTimeout(() => { hasDragged.current = false; }, 60);
+  }, []);
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    touchEndX.current = e.changedTouches[0].clientX;
-    const diff = touchStartX.current - touchEndX.current;
-    if (Math.abs(diff) > 40) {
-      if (diff > 0) goNext();
-      else goPrev();
+  // ── PC nav buttons ───────────────────────────────────────────────────────
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  const scrollToIdx = (idx: number) => {
+    if (!carouselRef.current) return;
+    const items = carouselRef.current.querySelectorAll<HTMLElement>('.bcbi');
+    if (items[idx]) {
+      const offset = items[idx].offsetLeft - carouselRef.current.offsetLeft;
+      carouselRef.current.scrollTo({ left: offset, behavior: 'smooth' });
     }
   };
 
-  const openModal = (index: number) => {
-    setShowIndex(index);
-    setShowModal(true);
+  const navPrev = () => { const n = Math.max(0, activeIdx - 1); setActiveIdx(n); scrollToIdx(n); };
+  const navNext = () => { const n = Math.min(files.length - 1, activeIdx + 1); setActiveIdx(n); scrollToIdx(n); };
+
+  const handleCardClick = (f: BundleFile) => {
+    if (hasDragged.current || f.uploading) return;
+    openViewer(f.url);
   };
 
-  const currentFile = files[currentIndex];
-
-  const arrowBtn: React.CSSProperties = {
-    position: 'absolute', top: '50%', transform: 'translateY(-50%)',
-    width: '24px', height: '24px', borderRadius: '50%',
-    background: 'rgba(0,0,0,0.35)', border: 'none', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 0, color: '#fff', zIndex: 2,
-    transition: 'background 0.15s'
-  };
+  const CARD_W_MEDIA = 140;
+  const CARD_W_FILE = 130;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '100%' }}>
-      {text && (
-        <span className="msg-text" style={{ fontSize: '13px', marginBottom: '2px', wordBreak: 'break-all' }}>
-          {text}
-        </span>
-      )}
+    <>
+      <style>{`
+        .bcwrap {
+          position: relative;
+          overflow: hidden;
+        }
+        .bcc {
+          display: flex;
+          gap: 10px;
+          overflow-x: auto;
+          overflow-y: hidden;
+          scroll-snap-type: x mandatory;
+          -webkit-overflow-scrolling: touch;
+          padding: 2px 2px 6px 2px;
+          cursor: grab;
+        }
+        .bcc::-webkit-scrollbar { display: none; }
+        .bcbi {
+          flex-shrink: 0;
+          height: 175px;
+          border-radius: 16px;
+          overflow: hidden;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          position: relative;
+          scroll-snap-align: start;
+          transition: transform 0.2s, box-shadow 0.2s;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+          -webkit-user-drag: none;
+          user-select: none;
+        }
+        .bcbi:hover { transform: translateY(-2px); box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .bcnav {
+          position: absolute;
+          top: 50%;
+          transform: translateY(-60%);
+          width: 26px; height: 26px;
+          border-radius: 50%;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          box-shadow: 0 2px 6px rgba(0,0,0,0.14);
+          display: flex; align-items: center; justify-content: center;
+          cursor: pointer; z-index: 10;
+          color: var(--text); font-size: 16px;
+          transition: background 0.15s, opacity 0.2s;
+          opacity: 0; pointer-events: none;
+        }
+        .bcwrap:hover .bcnav:not(:disabled) { opacity: 1; pointer-events: auto; }
+        .bcnav:disabled { opacity: 0 !important; pointer-events: none; }
+        .bcnav:hover { background: var(--hover); }
+        .bcnav-prev { left: 2px; }
+        .bcnav-next { right: 2px; }
+        @media (hover: none) { .bcnav { display: none !important; } }
+      `}</style>
 
-      {files.length === 0 ? null : allImages ? (
-        <div
-          style={{ position: 'relative', width: '280px', maxWidth: '100%' }}
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-        >
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            gap: '0', overflow: 'hidden',
-            borderRadius: '8px', height: '200px', position: 'relative',
-            background: 'var(--bg)'
-          }}>
-            {currentIndex > 0 && (
-              <div
-                onClick={goPrev}
-                style={{
-                  flexShrink: 0, width: '14%', height: '100%',
-                  background: `url(${files[currentIndex - 1].url}) center/cover no-repeat`,
-                  filter: 'brightness(0.7)', cursor: 'pointer',
-                  transition: 'filter 0.15s', position: 'relative'
-                }}
-                onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.85)'}
-                onMouseLeave={e => e.currentTarget.style.filter = 'brightness(0.7)'}
-              />
-            )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', minWidth: 0 }}>
+        {text && (
+          <span className="msg-text" style={{ fontSize: '13.5px', wordBreak: 'break-all', display: 'block', padding: '0 2px' }}>
+            {text}
+          </span>
+        )}
+
+        {files.length > 0 && (
+          <div className="bcwrap">
+            <button className="bcnav bcnav-prev" onClick={navPrev} disabled={activeIdx === 0} title="上一张">‹</button>
+            <button className="bcnav bcnav-next" onClick={navNext} disabled={activeIdx === files.length - 1} title="下一张">›</button>
+
             <div
-              onClick={() => openModal(currentIndex)}
-              style={{
-                flex: 1, height: '100%', cursor: 'pointer',
-                background: `url(${currentFile.url}) center/contain no-repeat`,
-                backgroundSize: 'contain', minWidth: '72%',
-                transition: 'opacity 0.2s'
-              }}
-            />
-            {currentIndex < files.length - 1 && (
-              <div
-                onClick={goNext}
-                style={{
-                  flexShrink: 0, width: '14%', height: '100%',
-                  background: `url(${files[currentIndex + 1].url}) center/cover no-repeat`,
-                  filter: 'brightness(0.7)', cursor: 'pointer',
-                  transition: 'filter 0.15s', position: 'relative'
-                }}
-                onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.85)'}
-                onMouseLeave={e => e.currentTarget.style.filter = 'brightness(0.7)'}
-              />
-            )}
-          </div>
+              className="bcc"
+              ref={carouselRef}
+              onMouseDown={onMouseDown}
+              onMouseMove={onMouseMove}
+              onMouseUp={endDrag}
+              onMouseLeave={endDrag}
+            >
+              {files.map((f, i) => {
+                const isMedia = f.file_type === 'image' || f.file_type === 'video';
+                const width = isMedia ? CARD_W_MEDIA : CARD_W_FILE;
 
-          {currentIndex > 0 && (
-            <button onClick={goPrev} style={{ ...arrowBtn, left: '4px' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-            </button>
-          )}
-          {currentIndex < files.length - 1 && (
-            <button onClick={goNext} style={{ ...arrowBtn, right: '4px' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-            </button>
-          )}
+                if (isMedia) {
+                  return (
+                    <div
+                      key={i}
+                      className="bcbi"
+                      style={{ width, cursor: f.uploading ? 'default' : 'pointer' }}
+                      onClick={() => handleCardClick(f)}
+                    >
+                      <div style={{
+                        width: '100%', height: '100%', flexShrink: 0,
+                        background: `url(${getThumbnailUrl(f.url, 'image')}) center/cover no-repeat`,
+                      }} />
+                      {f.file_type === 'video' && !f.uploading && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="#fff" stroke="none"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+                          </div>
+                        </div>
+                      )}
+                      {f.uploading && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.48)', gap: '8px' }}>
+                          <div style={{ width: 28, height: 28, border: '3px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                          <span style={{ fontSize: 11, color: '#fff', fontWeight: 500 }}>{f.progress || 0}%</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
 
-          {files.length > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginTop: '6px' }}>
-              {files.map((_, i) => (
-                <div
-                  key={i}
-                  onClick={() => setCurrentIndex(i)}
-                  style={{
-                    width: i === currentIndex ? '18px' : '6px', height: '6px',
-                    borderRadius: '3px', background: i === currentIndex ? 'var(--brand-blue)' : 'var(--border)',
-                    cursor: 'pointer', transition: 'all 0.2s'
-                  }}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div
-          style={{ position: 'relative', width: '260px', maxWidth: '100%', minHeight: '80px' }}
-          onTouchStart={handleTouchStart}
-          onTouchEnd={handleTouchEnd}
-        >
-          {files.map((f, i) => {
-            const isCurrent = i === currentIndex;
-            const offset = i - currentIndex;
-            return (
-              <div
-                key={i}
-                onClick={isCurrent ? () => openModal(i) : () => setCurrentIndex(i)}
-                style={{
-                  position: 'absolute', top: 0, left: 0, right: 0,
-                  transform: isCurrent ? 'none' : `translateX(${offset * 8}px) translateY(${offset * 4}px)`,
-                  zIndex: files.length - offset,
-                  opacity: isCurrent ? 1 : Math.max(0.15, 1 - offset * 0.3),
-                  cursor: isCurrent ? 'pointer' : 'pointer',
-                  transition: 'transform 0.25s ease, opacity 0.25s ease',
-                  pointerEvents: isCurrent || offset === 1 ? 'auto' : 'none',
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px', padding: '10px 12px',
-                  display: 'flex', alignItems: 'center', gap: '10px',
-                  overflow: 'hidden'
-                }}
-              >
-                <div style={{ flexShrink: 0, color: 'var(--brand-blue)', display: 'flex' }}>
-                  {getFileIcon(f.file_name)}
-                </div>
-                <div style={{ flex: 1, overflow: 'hidden' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {f.file_name}
+                return (
+                  <div
+                    key={i}
+                    className="bcbi"
+                    style={{ width, padding: '14px 10px', alignItems: 'center', justifyContent: 'space-between', textAlign: 'center', cursor: f.uploading ? 'default' : 'pointer' }}
+                    onClick={() => handleCardClick(f)}
+                  >
+                    <div style={{ color: 'var(--brand-blue)', marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {f.uploading ? (
+                        <div style={{ width: 32, height: 32, border: '3px solid rgba(0,0,0,0.1)', borderTopColor: 'var(--brand-blue)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                      ) : (
+                        <div style={{ transform: 'scale(1.3)', display: 'flex' }}>{getFileIcon(f.file_name)}</div>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%', overflow: 'hidden' }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', padding: '0 2px', pointerEvents: 'none' }}>
+                        {f.file_name}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text-dim)', pointerEvents: 'none' }}>
+                        {f.uploading ? `上传中 ${f.progress || 0}%` : formatBytes(f.file_size)}
+                      </div>
+                    </div>
+
+                    {!f.uploading && (
+                      <div style={{ fontSize: 9.5, color: 'var(--brand-blue)', fontWeight: 700, border: '1px solid var(--border)', borderRadius: 10, padding: '2px 8px', background: 'var(--bg-paper)' }}>
+                        查看
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '2px' }}>
-                    {formatBytes(f.file_size)}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-
-          {files.length > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '100px' }}>
-              <button
-                onClick={goPrev}
-                disabled={currentIndex === 0}
-                style={{
-                  background: 'none', border: 'none', cursor: currentIndex === 0 ? 'default' : 'pointer',
-                  padding: '2px', color: currentIndex === 0 ? 'var(--text-dim)' : 'var(--text)',
-                  fontSize: '13px', transition: 'color 0.15s',
-                  opacity: currentIndex === 0 ? 0.3 : 1
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-              </button>
-              <span style={{ fontSize: '11px', color: 'var(--text-dim)', fontWeight: 500, userSelect: 'none' }}>
-                {currentIndex + 1} / {files.length}
-              </span>
-              <button
-                onClick={goNext}
-                disabled={currentIndex === files.length - 1}
-                style={{
-                  background: 'none', border: 'none', cursor: currentIndex === files.length - 1 ? 'default' : 'pointer',
-                  padding: '2px', color: currentIndex === files.length - 1 ? 'var(--text-dim)' : 'var(--text)',
-                  fontSize: '13px', transition: 'color 0.15s',
-                  opacity: currentIndex === files.length - 1 ? 0.3 : 1
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-              </button>
+                );
+              })}
             </div>
-          )}
-        </div>
-      )}
-
-      {showModal && (
-        <div
-          onClick={() => setShowModal(false)}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 9999,
-            background: 'rgba(0,0,0,0.85)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center',
-            flexDirection: 'column', gap: '12px'
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ position: 'relative', maxWidth: '90vw', maxHeight: '80vh' }}
-          >
-            <img
-              src={files[showIndex]?.url}
-              alt={files[showIndex]?.file_name}
-              style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: '4px', objectFit: 'contain' }}
-            />
           </div>
-          {files.length > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <button
-                onClick={() => setShowIndex(i => Math.max(0, i - 1))}
-                disabled={showIndex === 0}
-                style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: '36px', height: '36px', cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}
-              >
-                ‹
-              </button>
-              <span style={{ color: '#fff', fontSize: '13px' }}>{showIndex + 1} / {files.length}</span>
-              <button
-                onClick={() => setShowIndex(i => Math.min(files.length - 1, i + 1))}
-                disabled={showIndex === files.length - 1}
-                style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: '36px', height: '36px', cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}
-              >
-                ›
-              </button>
-            </div>
-          )}
-          <a
-            href={files[showIndex]?.url}
-            target="_blank" rel="noopener noreferrer"
-            style={{ color: '#fff', fontSize: '12px', textDecoration: 'underline', opacity: 0.7 }}
-          >
-            在新标签页打开
-          </a>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </>
   );
 }
