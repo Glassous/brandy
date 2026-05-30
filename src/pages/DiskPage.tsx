@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useApp } from '../contexts/AppContext';
 import { useToast } from '../components/shared/Toast';
 import COS from 'cos-js-sdk-v5';
 import { API_BASE } from '../config';
+import DiskPreview from './DiskPreview';
 
-interface DiskItem {
+export interface DiskItem {
   id: string;
   user_id: string;
   parent_id?: string;
@@ -57,12 +58,26 @@ export function DiskPage() {
   const [activeTab, setActiveTab] = useState<'drive' | 'trash'>('drive');
   const [trashItems, setTrashItems] = useState<DiskItem[]>([]);
 
-  // Multi Selection state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Multi Selection state (persisted per folder level)
+  const [selectionMap, setSelectionMap] = useState<Map<string | null, Set<string>>>(new Map());
+  const selectedIds = useMemo(() => selectionMap.get(currentFolderId) ?? new Set<string>(), [selectionMap, currentFolderId]);
+
+  // File preview state
+  const [previewFile, setPreviewFile] = useState<DiskItem | null>(null);
+  const previewFileList = useMemo(() => items.filter(i => i.type === 'file'), [items]);
+  const previewIndex = previewFile ? previewFileList.findIndex(i => i.id === previewFile.id) : -1;
+
+  // Close preview when navigating to a different folder
+  useEffect(() => { setPreviewFile(null); }, [currentFolderId]);
+  // Close preview if the file is no longer in the list
+  useEffect(() => {
+    if (previewFile && !items.some(i => i.id === previewFile.id)) setPreviewFile(null);
+  }, [items, previewFile]);
 
   // Folder selector modal for move/copy
   const [showFolderSelector, setShowFolderSelector] = useState<'move' | 'copy' | null>(null);
   const [selectorFolderId, setSelectorFolderId] = useState<string | null>(null);
+  const [singleActionItem, setSingleActionItem] = useState<DiskItem | null>(null);
   const [selectorItems, setSelectorItems] = useState<DiskItem[]>([]);
   const [selectorBreadcrumbs, setSelectorBreadcrumbs] = useState<Breadcrumb[]>([]);
 
@@ -77,6 +92,21 @@ export function DiskPage() {
   const [selectedFriendId, setSelectedFriendId] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const actionMenuRef = useRef<HTMLDivElement>(null);
+  const [actionMenuTarget, setActionMenuTarget] = useState<string | null>(null);
+
+  // Close action overflow menu on outside click
+  useEffect(() => {
+    if (!actionMenuTarget) return;
+    const handleClick = (e: MouseEvent) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(e.target as Node)) {
+        setActionMenuTarget(null);
+      }
+    };
+    // Delay adding listener to avoid the triggering click itself
+    setTimeout(() => document.addEventListener('click', handleClick), 0);
+    return () => document.removeEventListener('click', handleClick);
+  }, [actionMenuTarget]);
 
   const getHeaders = useCallback(() => ({
     'Content-Type': 'application/json',
@@ -160,11 +190,15 @@ export function DiskPage() {
       const res = await fetch(url, { headers: getHeaders() });
       if (res.ok) {
         const data: DiskItem[] = await res.json();
-        // Exclude the selected items to prevent loops
-        setSelectorItems(data.filter(item => item.type === 'folder' && !selectedIds.has(item.id)));
+        // Exclude the selected/single-action items to prevent loops
+        setSelectorItems(data.filter(item =>
+          item.type === 'folder' &&
+          !selectedIds.has(item.id) &&
+          item.id !== singleActionItem?.id
+        ));
       }
     } catch { /* ignore */ }
-  }, [getHeaders, selectedIds]);
+  }, [getHeaders, selectedIds, singleActionItem]);
 
   const fetchSelectorBreadcrumbs = useCallback(async (folderId: string | null) => {
     if (!folderId) {
@@ -285,7 +319,7 @@ export function DiskPage() {
       const data = await res.json();
       if (res.ok) {
         showToast('批量移入回收站成功', 'success');
-        setSelectedIds(new Set());
+        setSelectionMap(prev => { const n = new Map(prev); n.set(currentFolderId, new Set()); return n; });
         fetchItems(currentFolderId);
         fetchUsage();
       } else {
@@ -296,8 +330,9 @@ export function DiskPage() {
     }
   };
 
-  // Open folder tree selector modal
-  const handleOpenFolderSelector = (type: 'move' | 'copy') => {
+  // Open folder tree selector modal (batch or single)
+  const handleOpenFolderSelector = (type: 'move' | 'copy', item?: DiskItem) => {
+    setSingleActionItem(item ?? null);
     setSelectorFolderId(null);
     setShowFolderSelector(type);
   };
@@ -306,7 +341,8 @@ export function DiskPage() {
   const handleFolderSelectorConfirm = async () => {
     if (!showFolderSelector) return;
     const targetParentId = selectorFolderId || 'root';
-    const itemIds = Array.from(selectedIds);
+    const itemIds = singleActionItem ? [singleActionItem.id] : Array.from(selectedIds);
+    if (itemIds.length === 0) return;
     const url = showFolderSelector === 'move' ? `${API_BASE}/api/disk/items/move` : `${API_BASE}/api/disk/items/copy`;
 
     try {
@@ -319,7 +355,10 @@ export function DiskPage() {
       if (res.ok) {
         showToast(showFolderSelector === 'move' ? '移动成功' : '复制成功', 'success');
         setShowFolderSelector(null);
-        setSelectedIds(new Set());
+        setSingleActionItem(null);
+        if (!singleActionItem) {
+          setSelectionMap(prev => { const n = new Map(prev); n.set(currentFolderId, new Set()); return n; });
+        }
         fetchItems(currentFolderId);
         fetchUsage();
       } else {
@@ -1032,10 +1071,16 @@ export function DiskPage() {
           outline: none;
         }
 
+        .checkbox-col {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
         .item-name-details {
           display: flex;
           flex-direction: column;
           overflow: hidden;
+          min-width: 0;
         }
         .item-name-text {
           overflow: hidden;
@@ -1050,65 +1095,6 @@ export function DiskPage() {
         }
         .btn-text {
           margin-left: 6px;
-        }
-
-        @media (max-width: 768px) {
-          .disk-sidebar {
-            display: none;
-          }
-          .btn-text {
-            display: none;
-          }
-          .disk-header {
-            height: auto !important;
-            min-height: 56px;
-            padding: 8px 16px !important;
-            flex-wrap: wrap;
-            gap: 8px !important;
-          }
-          .top-usage-container {
-            max-width: none !important;
-            width: 100% !important;
-            order: 3;
-            margin: 4px 0 !important;
-          }
-          .breadcrumbs {
-            order: 1;
-          }
-          .header-actions {
-            order: 2;
-          }
-          .list-header {
-            display: none !important;
-          }
-          .item-row {
-            grid-template-columns: 1fr auto !important;
-            padding: 10px 12px !important;
-            gap: 12px !important;
-          }
-          .item-size-col, .item-time-col {
-            display: none !important;
-          }
-          .item-actions-col {
-            opacity: 1 !important;
-            display: flex;
-            gap: 4px;
-          }
-          .action-icon-btn {
-            padding: 6px !important;
-          }
-          .disk-list-pane {
-            padding: 8px 16px !important;
-          }
-          .item-meta-mobile {
-            display: inline !important;
-          }
-          .upload-queue-panel {
-            width: calc(100% - 32px) !important;
-            left: 16px !important;
-            right: 16px !important;
-            bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
-          }
         }
 
         /* Top Space Capacity & Actions Header styling */
@@ -1296,6 +1282,217 @@ export function DiskPage() {
             transform: rotate(360deg);
           }
         }
+
+        /* ===== Action Overflow Menu ===== */
+        .action-btn-group {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .action-more-btn {
+          display: none;
+          background: transparent;
+          border: none;
+          cursor: pointer;
+          color: var(--text-secondary);
+          padding: 4px 6px;
+          border-radius: 4px;
+          transition: background 0.2s, color 0.2s;
+          line-height: 1;
+        }
+        .action-more-btn:hover { background: var(--border-light); color: var(--text-primary); }
+        .action-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 950;
+          background: rgba(0,0,0,0.15);
+        }
+        .action-sheet {
+          position: fixed;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          background: var(--bg-card);
+          border-radius: 16px 16px 0 0;
+          box-shadow: 0 -4px 30px rgba(0,0,0,0.12);
+          max-height: 70vh;
+          overflow-y: auto;
+          animation: sheet-up 0.2s ease-out;
+        }
+        @keyframes sheet-up {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+        .action-sheet-arrow {
+          width: 36px; height: 4px;
+          background: var(--border);
+          border-radius: 2px;
+          margin: 10px auto 4px;
+        }
+        .action-sheet-body {
+          padding: 8px 16px 24px;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .action-sheet-item-name {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--text-primary);
+          padding: 8px 12px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          border-bottom: 1px solid var(--border-light);
+          margin-bottom: 6px;
+        }
+        .action-sheet-btn {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 12px 12px;
+          border-radius: 8px;
+          border: none;
+          background: transparent;
+          color: var(--text-primary);
+          font-size: 14px;
+          cursor: pointer;
+          transition: background 0.15s;
+          text-decoration: none;
+          width: 100%;
+          text-align: left;
+        }
+        .action-sheet-btn:hover { background: var(--hover); }
+        .action-sheet-btn-danger { color: var(--badge-unread); }
+        .action-sheet-btn svg { flex-shrink: 0; }
+
+        /* ===== Tablet Responsive (768px - 1023px) ===== */
+        @media (min-width: 768px) and (max-width: 1023px) {
+          .disk-sidebar {
+            width: 60px;
+            padding: 20px 8px;
+            align-items: center;
+          }
+          .disk-sidebar-title { display: none; }
+          .disk-sidebar .btn span { display: none; }
+          .disk-sidebar .btn {
+            justify-content: center !important;
+            padding: 10px 0 !important;
+            font-size: 20px !important;
+          }
+          .usage-card { display: none; }
+          .checkbox-col { display: none; }
+          .list-header { grid-template-columns: 1fr auto !important; }
+          .item-row { grid-template-columns: 1fr auto !important; }
+          .item-size-col, .item-time-col { display: none; }
+          .item-actions-col { opacity: 1; gap: 4px; }
+          .action-btn-group { gap: 4px; }
+          .action-icon-btn { padding: 5px; }
+          .top-usage-container { max-width: 160px; gap: 6px; }
+          .disk-list-pane { padding: 12px 20px; }
+          .disk-header { gap: 8px; padding: 0 16px; }
+          .back-btn { padding: 6px 8px; }
+          .back-btn span { display: none; }
+          .header-actions .btn,
+          .header-actions .btn-secondary {
+            background: transparent;
+            border: none;
+            padding: 6px;
+            gap: 0;
+            min-width: 0;
+          }
+          .header-actions .btn-danger {
+            background: transparent;
+            border: none;
+            padding: 6px;
+            gap: 0;
+            min-width: 0;
+            color: var(--badge-unread);
+          }
+        }
+
+        /* ===== Mobile Responsive (< 768px) ===== */
+        @media (max-width: 768px) {
+          .disk-sidebar { display: none; }
+          .btn-text { display: none; }
+          .checkbox-col { display: none !important; }
+          .disk-header {
+            height: auto !important;
+            min-height: 48px;
+            padding: 6px 12px !important;
+            flex-wrap: wrap;
+            gap: 4px !important;
+          }
+          .back-btn {
+            padding: 4px 6px;
+            border: none;
+            background: transparent;
+          }
+          .back-btn span { display: none; }
+          .breadcrumbs { order: 1; font-size: 13px; }
+          .header-actions { order: 2; gap: 2px; }
+          .header-actions .btn,
+          .header-actions .btn-secondary,
+          .header-actions .btn-danger {
+            background: transparent !important;
+            border: none !important;
+            padding: 6px !important;
+            gap: 0 !important;
+            min-width: 0 !important;
+            box-shadow: none !important;
+            color: var(--text-secondary);
+          }
+          .header-actions .btn:hover,
+          .header-actions .btn-secondary:hover,
+          .header-actions .btn-danger:hover {
+            background: var(--hover) !important;
+            color: var(--text-primary) !important;
+          }
+          .header-actions .btn-danger { color: var(--badge-unread); }
+          .header-actions svg { width: 18px; height: 18px; }
+          .list-header { display: none !important; }
+          .item-row {
+            grid-template-columns: 1fr auto !important;
+            padding: 10px 12px !important;
+            gap: 10px !important;
+          }
+          .item-name-col { gap: 8px; min-width: 0; }
+          .item-size-col, .item-time-col { display: none !important; }
+          .item-actions-col {
+            opacity: 1 !important;
+            display: flex;
+            gap: 2px;
+            align-items: center;
+          }
+          .action-btn-group { display: none !important; }
+          .action-more-btn { display: flex !important; }
+          .disk-list-pane { padding: 6px 12px !important; }
+          .item-meta-mobile { display: inline !important; }
+          .top-usage-container {
+            max-width: none !important;
+            width: 100% !important;
+            order: 3;
+            margin: 2px 0 !important;
+          }
+          .upload-queue-panel {
+            width: calc(100% - 32px) !important;
+            left: 16px !important;
+            right: 16px !important;
+            bottom: calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+          }
+          .floating-select-toolbar {
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            width: calc(100% - 32px) !important;
+            padding: 10px 16px !important;
+            gap: 12px !important;
+            flex-wrap: wrap;
+            justify-content: center;
+          }
+          .floating-select-toolbar > span { width: 100%; text-align: center; }
+          .floating-select-toolbar .btn-sm { font-size: 12px !important; padding: 6px 10px !important; }
+          .modal-content { width: calc(100% - 32px) !important; max-width: 400px; }
+        }
       `}</style>
 
       {/* Sidebar for Navigation & Tabs */}
@@ -1307,7 +1504,7 @@ export function DiskPage() {
             style={{ justifyContent: 'flex-start', textAlign: 'left', width: '100%', padding: '10px 14px', borderRadius: '8px' }}
             onClick={() => {
               setActiveTab('drive');
-              setSelectedIds(new Set());
+              setSelectionMap(new Map());
             }}
           >
             📁 我的文件
@@ -1317,7 +1514,7 @@ export function DiskPage() {
             style={{ justifyContent: 'flex-start', textAlign: 'left', width: '100%', padding: '10px 14px', borderRadius: '8px' }}
             onClick={() => {
               setActiveTab('trash');
-              setSelectedIds(new Set());
+              setSelectionMap(new Map());
             }}
           >
             🗑️ 回收站
@@ -1466,7 +1663,15 @@ export function DiskPage() {
 
         {/* File and Folder List Container */}
         <div className="disk-list-pane">
-          {loading ? (
+          {previewFile && activeTab === 'drive' ? (
+            <DiskPreview
+              file={previewFile}
+              fileList={previewFileList}
+              currentIndex={previewIndex}
+              onClose={() => setPreviewFile(null)}
+              onChangeIndex={(idx) => setPreviewFile(previewFileList[idx])}
+            />
+          ) : loading ? (
             <div className="empty-pane">
               <div>正在加载文件列表...</div>
             </div>
@@ -1495,11 +1700,11 @@ export function DiskPage() {
                       type="checkbox"
                       checked={items.length > 0 && selectedIds.size === items.length}
                       onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedIds(new Set(items.map(item => item.id)));
-                        } else {
-                          setSelectedIds(new Set());
-                        }
+                        setSelectionMap(prev => {
+                          const n = new Map(prev);
+                          n.set(currentFolderId, e.target.checked ? new Set(items.map(i => i.id)) : new Set());
+                          return n;
+                        });
                       }}
                       style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--brand-blue)' }}
                     />
@@ -1517,35 +1722,21 @@ export function DiskPage() {
                   key={item.id}
                   className={`item-row ${selectedIds.has(item.id) ? 'selected' : ''}`}
                   style={{ gridTemplateColumns: activeTab === 'trash' ? '2fr 1fr 1fr 160px' : '40px 2fr 1fr 1fr 120px' }}
-                  onClick={(e) => {
-                    if (activeTab === 'trash') return;
-                    e.stopPropagation();
-                    setSelectedIds(prev => {
-                      const next = new Set(prev);
-                      if (next.has(item.id)) {
-                        next.delete(item.id);
-                      } else {
-                        next.add(item.id);
-                      }
-                      return next;
-                    });
-                  }}
                 >
                   {/* Select Checkbox (Only in drive view) */}
                   {activeTab === 'drive' && (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+                    <div className="checkbox-col" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={selectedIds.has(item.id)}
                         onChange={() => {
-                          setSelectedIds(prev => {
-                            const next = new Set(prev);
-                            if (next.has(item.id)) {
-                              next.delete(item.id);
-                            } else {
-                              next.add(item.id);
-                            }
-                            return next;
+                          setSelectionMap(prev => {
+                            const n = new Map(prev);
+                            const cur = n.get(currentFolderId) ?? new Set<string>();
+                            const upd = new Set(cur);
+                            if (upd.has(item.id)) { upd.delete(item.id); } else { upd.add(item.id); }
+                            n.set(currentFolderId, upd);
+                            return n;
                           });
                         }}
                         style={{ cursor: 'pointer', width: '15px', height: '15px', accentColor: 'var(--brand-blue)' }}
@@ -1555,11 +1746,14 @@ export function DiskPage() {
 
                   {/* Name Column */}
                   <div className="item-name-col" onClick={(e) => {
-                    if (activeTab === 'drive' && item.type === 'folder') {
+                    if (activeTab === 'drive') {
                       e.stopPropagation();
-                      setCurrentFolderId(item.id);
-                      setSelectedIds(new Set());
-                      window.history.pushState({ folderId: item.id }, '');
+                      if (item.type === 'folder') {
+                        setCurrentFolderId(item.id);
+                        window.history.pushState({ folderId: item.id }, '');
+                      } else {
+                        setPreviewFile(item);
+                      }
                     }
                   }}>
                     {item.type === 'folder' ? (
@@ -1591,57 +1785,86 @@ export function DiskPage() {
                   <div className="item-actions-col" onClick={(e) => e.stopPropagation()}>
                     {activeTab === 'drive' ? (
                       <>
-                        {item.type === 'file' && (
-                          <>
-                            {/* Download link */}
-                            <a href={item.url} target="_blank" rel="noopener noreferrer">
-                              <button className="action-icon-btn" title="下载">
+                        <div className="action-btn-group">
+                          {item.type === 'file' && (
+                            <>
+                              {/* Download link */}
+                              <a href={item.url} target="_blank" rel="noopener noreferrer">
+                                <button className="action-icon-btn" title="下载">
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="7 10 12 15 17 10" />
+                                    <line x1="12" y1="15" x2="12" y2="3" />
+                                  </svg>
+                                </button>
+                              </a>
+
+                              {/* Copy URL */}
+                              {item.url && (
+                                <button className="action-icon-btn" title="复制链接" onClick={() => handleCopyLink(item.url!)}>
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                                  </svg>
+                                </button>
+                              )}
+
+                              {/* Share */}
+                              <button className="action-icon-btn" title="分享给好友" onClick={() => { setShareTarget(item); setSelectedFriendId(friends[0]?.id || ''); }}>
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                  <polyline points="7 10 12 15 17 10" />
-                                  <line x1="12" y1="15" x2="12" y2="3" />
+                                  <circle cx="18" cy="5" r="3" />
+                                  <circle cx="6" cy="12" r="3" />
+                                  <circle cx="18" cy="19" r="3" />
+                                  <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                                  <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
                                 </svg>
                               </button>
-                            </a>
+                            </>
+                          )}
 
-                            {/* Copy URL */}
-                            {item.url && (
-                              <button className="action-icon-btn" title="复制链接" onClick={() => handleCopyLink(item.url!)}>
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                                </svg>
-                              </button>
-                            )}
+                          {/* Move */}
+                          <button className="action-icon-btn" title="移动到" onClick={() => handleOpenFolderSelector('move', item)}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M5 19l14-4" /><path d="M5 5l14 4-7 4-7-4z" />
+                            </svg>
+                          </button>
 
-                            {/* Share */}
-                            <button className="action-icon-btn" title="分享给好友" onClick={() => { setShareTarget(item); setSelectedFriendId(friends[0]?.id || ''); }}>
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="18" cy="5" r="3" />
-                                <circle cx="6" cy="12" r="3" />
-                                <circle cx="18" cy="19" r="3" />
-                                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-                              </svg>
-                            </button>
-                          </>
-                        )}
+                          {/* Copy */}
+                          <button className="action-icon-btn" title="复制到" onClick={() => handleOpenFolderSelector('copy', item)}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                            </svg>
+                          </button>
 
-                        {/* Rename */}
-                        <button className="action-icon-btn" title="重命名" onClick={() => { setRenameTarget(item); setRenameValue(item.name); }}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                        </button>
+                          {/* Rename */}
+                          <button className="action-icon-btn" title="重命名" onClick={() => { setRenameTarget(item); setRenameValue(item.name); }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
 
-                        {/* Delete */}
-                        <button className="action-icon-btn delete" title="删除" onClick={() => handleDelete(item.id)}>
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                            <line x1="10" y1="11" x2="10" y2="17" />
-                            <line x1="14" y1="11" x2="14" y2="17" />
+                          {/* Delete */}
+                          <button className="action-icon-btn delete" title="删除" onClick={() => handleDelete(item.id)}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6" />
+                              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                              <line x1="10" y1="11" x2="10" y2="17" />
+                              <line x1="14" y1="11" x2="14" y2="17" />
+                            </svg>
+                          </button>
+                        </div>
+
+                        {/* Mobile more button */}
+                        <button
+                          className="action-more-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActionMenuTarget(actionMenuTarget === item.id ? null : item.id);
+                          }}
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" />
                           </svg>
                         </button>
                       </>
@@ -1938,16 +2161,72 @@ export function DiskPage() {
             <button className="btn btn-danger btn-sm" onClick={handleBatchDelete}>
               批量删除
             </button>
-            <button className="btn btn-secondary btn-sm" onClick={() => setSelectedIds(new Set())}>
+            <button className="btn btn-secondary btn-sm" onClick={() => setSelectionMap(prev => { const n = new Map(prev); n.set(currentFolderId, new Set()); return n; })}>
               取消
             </button>
           </div>
         </div>
       )}
 
+      {/* Mobile/Tablet Action Overflow Menu */}
+      {actionMenuTarget && activeTab === 'drive' && (
+        <div className="action-overlay" onClick={() => setActionMenuTarget(null)}>
+          <div className="action-sheet" ref={actionMenuRef} onClick={(e) => e.stopPropagation()}>
+            <div className="action-sheet-arrow" />
+            <div className="action-sheet-body">
+              {(() => {
+                const target = items.find(i => i.id === actionMenuTarget);
+                if (!target) return null;
+                return (
+                  <>
+                    <div className="action-sheet-item-name">{target.name}</div>
+                    {target.type === 'file' && (
+                      <>
+                        {target.url && (
+                          <a href={target.url} target="_blank" rel="noopener noreferrer" className="action-sheet-btn" onClick={() => setActionMenuTarget(null)}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                            下载
+                          </a>
+                        )}
+                        {target.url && (
+                          <button className="action-sheet-btn" onClick={() => { handleCopyLink(target.url!); setActionMenuTarget(null); }}>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                            复制链接
+                          </button>
+                        )}
+                        <button className="action-sheet-btn" onClick={() => { setShareTarget(target); setSelectedFriendId(friends[0]?.id || ''); setActionMenuTarget(null); }}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" /></svg>
+                          分享给好友
+                        </button>
+                      </>
+                    )}
+                    <button className="action-sheet-btn" onClick={() => { handleOpenFolderSelector('move', target); setActionMenuTarget(null); }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M5 19l14-4" /><path d="M5 5l14 4-7 4-7-4z" /></svg>
+                      移动到
+                    </button>
+                    <button className="action-sheet-btn" onClick={() => { handleOpenFolderSelector('copy', target); setActionMenuTarget(null); }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                      复制到
+                    </button>
+                    <button className="action-sheet-btn" onClick={() => { setRenameTarget(target); setRenameValue(target.name); setActionMenuTarget(null); }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                      重命名
+                    </button>
+                    <button className="action-sheet-btn action-sheet-btn-danger" onClick={() => { handleDelete(target.id); setActionMenuTarget(null); }}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                      删除
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal: Target Folder Selector Tree Browser */}
       {showFolderSelector && (
-        <div className="modal-overlay" onClick={() => setShowFolderSelector(null)}>
+        <div className="modal-overlay" onClick={() => { setShowFolderSelector(null); setSingleActionItem(null); }}>
           <div className="modal-content" style={{ width: '460px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', margin: 0 }}>
               {showFolderSelector === 'move' ? '选择移动目标目录' : '选择复制目标目录'}
@@ -2010,7 +2289,7 @@ export function DiskPage() {
 
             {/* Modal actions */}
             <div className="modal-actions" style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', margin: 0, flexShrink: 0 }}>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowFolderSelector(null)}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setShowFolderSelector(null); setSingleActionItem(null); }}>
                 取消
               </button>
               <button type="button" className="btn btn-primary btn-sm" onClick={handleFolderSelectorConfirm}>
