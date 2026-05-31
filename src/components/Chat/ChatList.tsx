@@ -53,6 +53,9 @@ function formatLastMessage(msg: string) {
         if (parsed.type === 'file_share') {
           return '[文件]';
         }
+        if (parsed.type === 'sticker') {
+          return '[表情]';
+        }
         return '[消息]';
       }
     } catch {

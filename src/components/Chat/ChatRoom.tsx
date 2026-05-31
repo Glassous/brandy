@@ -2730,12 +2730,12 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                               {chatBundleData && <ChatBundleCard data={chatBundleData} />}
                               {gameCardData && <GameCard data={gameCardData} isOwn={m.sender_id === user?.id} onOpenGame={(gid) => setActiveGameId(gid)} />}
                               {stickerData && (
-                                <div style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px', cursor: 'pointer' }} onClick={() => openMediaViewer(stickerData.url)}>
+                                <div style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px' }}>
                                   <img src={stickerData.url} alt="表情" style={{ maxWidth: '120px', maxHeight: '120px', objectFit: 'contain', display: 'block', borderRadius: '4px' }} />
                                 </div>
                               )}
 
-                              {!fileShareData && !chatFileData && !chatBundleData && !gameCardData && (
+                              {!fileShareData && !chatFileData && !chatBundleData && !gameCardData && !stickerData && (
                                 <span className="msg-text">
                                   {m.content}
                                   {m.is_edited && (
