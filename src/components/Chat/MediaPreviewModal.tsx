@@ -4,6 +4,14 @@ import { useToast } from '../shared/Toast';
 import { CloseIcon } from '../shared/Icons';
 import { API_BASE } from '../../config';
 import type { MediaItem } from './ChatMediaContext';
+import {
+  isTextFile,
+  getFileExtension,
+  getPrismLanguage,
+  CodeHighlight,
+  MarkdownPreview,
+  CSVPreview
+} from '../../utils/previewHelper';
 
 interface MediaPreviewModalProps {
   files: MediaItem[];
@@ -76,11 +84,37 @@ export default function MediaPreviewModal({ files, index, onIndexChange, onClose
   const { showToast } = useToast();
   const [saving, setSaving] = useState(false);
   const [savedUrls, setSavedUrls] = useState<Set<string>>(new Set());
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [loadingText, setLoadingText] = useState(false);
+  const [textError, setTextError] = useState<string | null>(null);
+  const [htmlMode, setHtmlMode] = useState<'preview' | 'code'>('preview');
 
   const file = files[index];
+  const isText = file ? isTextFile(file.file_name) : false;
+  const ext = file ? getFileExtension(file.file_name) : '';
   const hasPrev = index > 0;
   const hasNext = index < files.length - 1;
   const isSaved = file ? savedUrls.has(file.url) : false;
+
+  useEffect(() => {
+    if (!file || !isText) return;
+    setLoadingText(true);
+    setTextError(null);
+    setTextContent(null);
+    fetch(file.url)
+      .then(res => {
+        if (!res.ok) throw new Error('无法读取文件内容');
+        return res.text();
+      })
+      .then(data => {
+        setTextContent(data);
+        setLoadingText(false);
+      })
+      .catch(err => {
+        setTextError(err.message || '加载文本失败');
+        setLoadingText(false);
+      });
+  }, [file?.url, file?.file_name, isText]);
 
   const prev = useCallback(() => { if (hasPrev) onIndexChange(index - 1); }, [hasPrev, index, onIndexChange]);
   const next = useCallback(() => { if (hasNext) onIndexChange(index + 1); }, [hasNext, index, onIndexChange]);
@@ -131,6 +165,7 @@ export default function MediaPreviewModal({ files, index, onIndexChange, onClose
     >
       <style>{`
         @keyframes mpv-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .mpv-root {
           position: fixed; inset: 0; z-index: 9999;
           display: flex; flex-direction: column;
@@ -434,7 +469,88 @@ export default function MediaPreviewModal({ files, index, onIndexChange, onClose
                 <audio key={file.url} src={file.url} controls autoPlay style={{ width: '100%', marginTop: '4px' }} />
               </div>
             )}
-            {!isImage && !isVideo && !isAudio && (
+            {!isImage && !isVideo && !isAudio && isText && (
+              <div style={{
+                width: '90vw',
+                height: 'calc(100vh - 160px)',
+                maxWidth: '1000px',
+                display: 'flex',
+                flexDirection: 'column',
+                color: '#fff',
+                ['--text-primary' as any]: '#ffffff',
+                ['--text-secondary' as any]: 'rgba(255, 255, 255, 0.7)',
+                ['--bg-card' as any]: 'rgba(255, 255, 255, 0.03)',
+                ['--border' as any]: 'rgba(255, 255, 255, 0.1)',
+                ['--hover' as any]: 'rgba(255, 255, 255, 0.08)'
+              }}>
+                {loadingText && (
+                  <div style={{ color: 'rgba(255,255,255,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '10px' }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
+                      <circle cx="12" cy="12" r="10" strokeDasharray="30 30" />
+                    </svg>
+                    <span>正在加载内容...</span>
+                  </div>
+                )}
+                {textError && (
+                  <div className="mpv-card">
+                    <p className="mpv-card-name" style={{ color: '#ff6b6b' }}>{textError}</p>
+                    <span className="mpv-card-size">{formatBytes(file.file_size)}</span>
+                  </div>
+                )}
+                {!loadingText && !textError && textContent !== null && (
+                  <>
+                    {(ext === 'html' || ext === 'htm') && (
+                      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexShrink: 0 }}>
+                          <button
+                            className={`mpv-btn ${htmlMode === 'preview' ? 'saved' : ''}`}
+                            onClick={() => setHtmlMode('preview')}
+                            style={{ padding: '4px 10px', fontSize: '11px' }}
+                          >
+                            网页预览
+                          </button>
+                          <button
+                            className={`mpv-btn ${htmlMode === 'code' ? 'saved' : ''}`}
+                            onClick={() => setHtmlMode('code')}
+                            style={{ padding: '4px 10px', fontSize: '11px' }}
+                          >
+                            HTML 源码
+                          </button>
+                        </div>
+                        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+                          {htmlMode === 'preview' ? (
+                            <iframe
+                              sandbox=""
+                              srcDoc={textContent}
+                              title="html-preview"
+                              style={{ width: '100%', height: '100%', border: 'none', background: '#ffffff', borderRadius: '6px' }}
+                            />
+                          ) : (
+                            <CodeHighlight code={textContent} language="markup" />
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {ext === 'csv' && (
+                      <div style={{ height: '100%', width: '100%', overflow: 'auto' }}>
+                        <CSVPreview content={textContent} />
+                      </div>
+                    )}
+                    {(ext === 'md' || ext === 'markdown') && (
+                      <div style={{ height: '100%', width: '100%', overflow: 'auto', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        <MarkdownPreview content={textContent} />
+                      </div>
+                    )}
+                    {ext !== 'html' && ext !== 'htm' && ext !== 'csv' && ext !== 'md' && ext !== 'markdown' && (
+                      <div style={{ height: '100%', width: '100%', overflow: 'auto' }}>
+                        <CodeHighlight code={textContent} language={getPrismLanguage(ext)} />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {!isImage && !isVideo && !isAudio && !isText && (
               <div className="mpv-card">
                 <div className="mpv-card-icon">
                   <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
