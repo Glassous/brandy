@@ -44,7 +44,7 @@ export function Avatar({ name, url, size = 40, fontSize }: AvatarProps) {
           }}
         />
       ) : (
-        name.slice(0, 1).toUpperCase()
+        (name ?? '?').slice(0, 1).toUpperCase()
       )}
     </div>
   );

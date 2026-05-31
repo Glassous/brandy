@@ -100,6 +100,27 @@ export function ChatPage() {
     return displayedChats.find(c => (c.is_group ? c.group_id : c.friend_id) === activeChatFriendId) || null;
   }, [activeChatFriendId, displayedChats]);
 
+  function formatSearchContent(content: string) {
+    if (!content) return '';
+    if (content.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(content);
+        if (parsed.type === 'sticker') return '[表情]';
+        if (parsed.type === 'chat_file') {
+          switch (parsed.file_type) {
+            case 'image': return '[图片]';
+            case 'video': return '[视频]';
+            case 'audio': return '[音频]';
+            default: return '[文件]';
+          }
+        }
+        if (parsed.type === 'file_share' || parsed.type === 'chat_bundle') return '[文件]';
+        return '[消息]';
+      } catch { return '[消息]'; }
+    }
+    return content.replace(/https?:\/\/[^\s]+/g, '[链接]');
+  }
+
   const handleSend = (chatId: string, content: string) => {
     sendMessage(chatId, content, activeChat?.is_group);
   };
@@ -390,8 +411,8 @@ export function ChatPage() {
                 <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>无匹配结果</div>
               ) : (
                 searchResults.map((res: any) => {
-                  const name = res.is_group ? res.group_name : res.sender_name;
-                  const avatar = res.is_group ? res.group_avatar : res.sender_avatar;
+                  const name = res.is_group ? (res.group_name ?? '未知') : (res.sender_name ?? '未知');
+                  const avatar = res.is_group ? (res.group_avatar ?? '') : (res.sender_avatar ?? '');
                   return (
                     <div 
                       key={res.id} 
@@ -413,7 +434,7 @@ export function ChatPage() {
                           <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{new Date(res.created_at).toLocaleDateString()}</span>
                         </div>
                         <div style={{ fontSize: '11px', color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          <strong>{res.sender_name}</strong>: {res.content.startsWith('{') ? '[文件/媒体]' : res.content}
+                          <strong>{res.sender_name ?? '未知'}</strong>: {formatSearchContent(res.content ?? '')}
                         </div>
                       </div>
                     </div>
