@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useApp } from '../../contexts/AppContext';
 import { useToast } from '../shared/Toast';
 import { API_BASE } from '../../config';
