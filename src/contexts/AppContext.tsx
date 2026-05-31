@@ -1242,6 +1242,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           } else if (msg.event === 'group_mute_all' || msg.event === 'group_mute_member' || msg.event === 'group_announcement_update') {
             setGroupUpdateTrigger(prev => prev + 1);
             fetchChats();
+          } else if (msg.event === 'game_update') {
+            window.dispatchEvent(new CustomEvent('brandy-game-update', { detail: msg.data }));
           } else if (msg.event === 'error') {
             showToast(msg.data.message, 'error');
           }

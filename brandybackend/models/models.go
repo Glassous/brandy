@@ -181,3 +181,36 @@ type GroupAuditLog struct {
 	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
 }
 
+type GamePlayer struct {
+	UserID   string `bson:"user_id" json:"user_id"`
+	Nickname string `bson:"nickname" json:"nickname"`
+	Avatar   string `bson:"avatar" json:"avatar"`
+	Score    int    `bson:"score" json:"score"`
+}
+
+type GameRound struct {
+	RoundNum int                    `bson:"round_num" json:"round_num"`
+	Moves    map[string]interface{} `bson:"moves" json:"moves"` // user_id -> move (RPS: rock/paper/scissors, Dice: number 1-6)
+	WinnerID string                 `bson:"winner_id" json:"winner_id"` // user_id or "draw"
+}
+
+type Game struct {
+	ID                 primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
+	Type               string               `bson:"type" json:"type"` // "rps" or "dice"
+	ChatID             string               `bson:"chat_id" json:"chat_id"`
+	IsGroup            bool                 `bson:"is_group" json:"is_group"`
+	CreatorID          string               `bson:"creator_id" json:"creator_id"`
+	CreatorName        string               `bson:"creator_name" json:"creator_name"`
+	Status             string               `bson:"status" json:"status"` // "pending", "active", "finished"
+	Players            []GamePlayer         `bson:"players" json:"players"`
+	Rounds             []GameRound          `bson:"rounds" json:"rounds"`
+	MaxRounds          int                  `bson:"max_rounds" json:"max_rounds"`
+	CurrentRound       int                  `bson:"current_round" json:"current_round"`
+	WinnerID           string               `bson:"winner_id" json:"winner_id"`
+	WinnerName         string               `bson:"winner_name" json:"winner_name"`
+	MessageID          string               `bson:"message_id" json:"message_id"`
+	RequireDecisiveWin bool                 `bson:"require_decisive_win" json:"require_decisive_win"`
+	CreatedAt          time.Time            `bson:"created_at" json:"created_at"`
+	UpdatedAt          time.Time            `bson:"updated_at" json:"updated_at"`
+}
+

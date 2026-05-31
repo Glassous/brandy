@@ -152,6 +152,12 @@ func main() {
 
 		// Chat Routes
 		api.POST("/chat/upload-credential", handlers.GetChatUploadCredential)
+
+		// Game Routes
+		api.POST("/games", handlers.CreateGame)
+		api.GET("/games/:id", handlers.GetGame)
+		api.POST("/games/:id/join", handlers.JoinGame)
+		api.POST("/games/:id/move", handlers.MakeMove)
 	}
 
 	// WebSocket endpoint

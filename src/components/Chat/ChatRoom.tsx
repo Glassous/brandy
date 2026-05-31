@@ -13,6 +13,7 @@ import ChatBundleCard from './ChatBundleCard';
 import MediaPreviewModal from './MediaPreviewModal';
 import { ChatMediaContext, type MediaItem } from './ChatMediaContext';
 import { Folder, File, Trash2, Upload, Plus, Edit3, ArrowLeft } from 'lucide-react';
+import GameRoomModal from './GameRoomModal';
 
 interface ChatRoomProps {
   currentUserId: string;
@@ -357,6 +358,97 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
   );
 }
 
+interface GameCardData {
+  type: 'game_card';
+  game_id: string;
+  game_type: 'rps' | 'dice';
+  status: 'pending' | 'active' | 'finished';
+  creator_id: string;
+  creator_name: string;
+  winner_name: string;
+}
+
+function GameCard({ data, isOwn, onOpenGame }: { data: GameCardData; isOwn: boolean; onOpenGame: (id: string) => void }) {
+  const getStatusText = () => {
+    switch (data.status) {
+      case 'pending': return '等待加入...';
+      case 'active': return '进行中';
+      case 'finished': return '已结束';
+      default: return '未知';
+    }
+  };
+
+  const getGameTitle = () => {
+    return data.game_type === 'rps' ? '猜拳挑战' : '骰子对决';
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
+      minWidth: '240px',
+      padding: '12px',
+      background: 'rgba(255, 255, 255, 0.04)',
+      border: '1px solid rgba(255, 255, 255, 0.08)',
+      borderRadius: '12px',
+      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.1)',
+      color: 'var(--text-primary)',
+      cursor: 'default'
+    }} onClick={e => e.stopPropagation()}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: '15px', fontWeight: 800, color: 'var(--brand-blue)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {data.game_type === 'rps' ? '✊✌️✋' : '🎲'} {getGameTitle()}
+        </span>
+        <span style={{
+          fontSize: '11px',
+          fontWeight: 600,
+          padding: '2px 8px',
+          borderRadius: '20px',
+          background: data.status === 'pending' ? 'rgba(0, 122, 255, 0.15)' : data.status === 'active' ? 'rgba(212, 184, 122, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+          color: data.status === 'pending' ? 'var(--brand-blue)' : data.status === 'active' ? 'var(--brand-yellow)' : 'var(--text-dim)'
+        }}>
+          {getStatusText()}
+        </span>
+      </div>
+
+      <div style={{ fontSize: '13px', color: 'var(--text-dim)', lineHeight: '1.4', textAlign: 'left' }}>
+        {data.status === 'pending' && (
+          isOwn ? '您发起了对战邀请，等待对手加入...' : `${data.creator_name} 发起了对战邀请，快来加入吧！`
+        )}
+        {data.status === 'active' && '对战正在火热进行中...'}
+        {data.status === 'finished' && (
+          data.winner_name === '平局' ? '比赛结束，双方握手言和（平局）！' : `比赛结束，获胜者是：${data.winner_name}`
+        )}
+      </div>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); onOpenGame(data.game_id); }}
+        style={{
+          width: '100%',
+          padding: '8px 12px',
+          border: 'none',
+          borderRadius: '8px',
+          background: data.status === 'pending' && !isOwn ? 'var(--brand-blue)' : 'rgba(255,255,255,0.08)',
+          color: '#fff',
+          fontWeight: 700,
+          fontSize: '12px',
+          cursor: 'pointer',
+          transition: 'opacity 0.2s, background-color 0.2s',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '4px'
+        }}
+        onMouseEnter={e => { e.currentTarget.style.opacity = '0.8'; }}
+        onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+      >
+        {data.status === 'pending' && !isOwn ? '加入对战' : '查看详情'}
+      </button>
+    </div>
+  );
+}
+
 export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar, messages, onSend, onLoad, onBack, highlightedMessageId, onClearHighlight }: ChatRoomProps) {
   const [text, setText] = useState('');
   // Group settings view tab state
@@ -393,7 +485,6 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const bottomRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const {
-    token,
     deleteLocalMessage,
     deleteLocalMessages,
     chats,
@@ -417,7 +508,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     muteAllGroup,
     muteGroupMember,
     groupUpdateTrigger,
-    fetchChats
+    fetchChats,
+    token,
+    user
   } = useApp();
   const { showToast } = useToast();
 
@@ -459,6 +552,15 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const [showUploadMenu, setShowUploadMenu] = useState(false);
   const [showCloudPicker, setShowCloudPicker] = useState(false);
   const uploadMenuRef = useRef<HTMLDivElement>(null);
+
+  // Game Room Modal
+  const [activeGameId, setActiveGameId] = useState<string | null>(null);
+
+  // Game Config Modal
+  const [showGameConfig, setShowGameConfig] = useState(false);
+  const [pendingGameType, setPendingGameType] = useState<'rps' | 'dice'>('rps');
+  const [gameBestOf, setGameBestOf] = useState(3);
+  const [gameDecisiveWin, setGameDecisiveWin] = useState(false);
 
   // Pending Files
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -610,6 +712,44 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       }
     } catch { /* ignore */ }
   }, [token]);
+
+  const openGameConfig = (gameType: 'rps' | 'dice') => {
+    setShowUploadMenu(false);
+    setPendingGameType(gameType);
+    setGameBestOf(3);
+    setGameDecisiveWin(false);
+    setShowGameConfig(true);
+  };
+
+  const handleInitiateGame = async (gameType: 'rps' | 'dice', bestOf: number, decisiveWin: boolean) => {
+    setShowGameConfig(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/games`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          type: gameType,
+          chat_id: chatId,
+          is_group: !!isGroup,
+          best_of: bestOf,
+          decisive_win: decisiveWin
+        })
+      });
+      if (res.ok) {
+        const gameData = await res.json();
+        setActiveGameId(gameData.id);
+        showToast('游戏发起成功，已进入对局室！', 'success');
+      } else {
+        const data = await res.json();
+        showToast(data.error || '游戏发起失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，发起游戏失败', 'error');
+    }
+  };
 
   // Fetch drive items reactive
   useEffect(() => {
@@ -2279,6 +2419,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           let fileShareData = null;
                           let chatFileData = null;
                           let chatBundleData = null;
+                          let gameCardData = null;
                           if (m.content.startsWith('{')) {
                             try {
                               const parsed = JSON.parse(m.content);
@@ -2289,6 +2430,8 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                                   chatFileData = parsed;
                                 } else if (parsed.type === 'chat_bundle') {
                                   chatBundleData = parsed;
+                                } else if (parsed.type === 'game_card') {
+                                  gameCardData = parsed;
                                 }
                               }
                             } catch { /* ignore */ }
@@ -2343,7 +2486,8 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                               {fileShareData && <FileShareCard fileShareData={fileShareData} isOwn={isOwn} />}
                               {chatFileData && <ChatFileCard data={chatFileData} />}
                               {chatBundleData && <ChatBundleCard data={chatBundleData} />}
-                              {!fileShareData && !chatFileData && !chatBundleData && (
+                              {gameCardData && <GameCard data={gameCardData} isOwn={m.sender_id === user?.id} onOpenGame={(gid) => setActiveGameId(gid)} />}
+                              {!fileShareData && !chatFileData && !chatBundleData && !gameCardData && (
                                 <span className="msg-text">
                                   {m.content}
                                   {m.is_edited && (
@@ -2600,6 +2744,33 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                         <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
                       </svg>
                       从云盘上传
+                    </button>
+                    <div style={{ height: '1px', background: 'var(--border)', margin: '6px 0' }} />
+                    <button
+                      onClick={() => openGameConfig('rps')}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', width: '100%',
+                        padding: '10px 14px', fontSize: '13px', color: 'var(--text)',
+                        cursor: 'pointer', background: 'none', border: 'none',
+                        transition: 'background 0.15s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                      ✊ 发起猜拳对战
+                    </button>
+                    <button
+                      onClick={() => openGameConfig('dice')}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', width: '100%',
+                        padding: '10px 14px', fontSize: '13px', color: 'var(--text)',
+                        cursor: 'pointer', background: 'none', border: 'none',
+                        transition: 'background 0.15s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                      🎲 发起骰子对决
                     </button>
                   </div>
                 )}
@@ -3457,6 +3628,82 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       )}
     </div>
 
+    {/* Game Config Modal */}
+    {showGameConfig && (
+      <div className="modal-overlay" onClick={() => setShowGameConfig(false)}>
+        <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: '380px' }}>
+          <div className="modal-header">
+            <span className="modal-title">{pendingGameType === 'rps' ? '✊ 发起猜拳对战' : '🎲 发起骰子对决'}</span>
+            <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowGameConfig(false)}><CloseIcon size={20} /></button>
+          </div>
+          <div className="modal-body">
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>
+                选择局数
+              </label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {[1, 3, 5, 7, 9].map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setGameBestOf(n)}
+                    style={{
+                      flex: 1, minWidth: '56px', padding: '8px 12px',
+                      borderRadius: '10px', border: gameBestOf === n ? '2px solid var(--brand-blue)' : '1px solid var(--border)',
+                      background: gameBestOf === n ? 'rgba(0, 122, 255, 0.12)' : 'rgba(255,255,255,0.04)',
+                      color: gameBestOf === n ? 'var(--brand-blue)' : 'var(--text)',
+                      fontWeight: gameBestOf === n ? 700 : 500,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    {n}局
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-dim)' }}>
+                {gameBestOf === 1 ? '一局定胜负' : `先赢${Math.floor(gameBestOf / 2) + 1}局者胜`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0' }}>
+              <label style={{ position: 'relative', display: 'inline-block', width: '40px', height: '22px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={gameDecisiveWin}
+                  onChange={e => setGameDecisiveWin(e.target.checked)}
+                  style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
+                />
+                <span style={{
+                  position: 'absolute', inset: 0, borderRadius: '22px',
+                  background: gameDecisiveWin ? 'var(--brand-blue)' : 'rgba(255,255,255,0.15)',
+                  transition: 'background 0.2s',
+                  cursor: 'pointer'
+                }}>
+                  <span style={{
+                    position: 'absolute', top: '2px', left: gameDecisiveWin ? '20px' : '2px',
+                    width: '18px', height: '18px', borderRadius: '50%',
+                    background: '#fff', transition: 'left 0.2s',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                  }} />
+                </span>
+              </label>
+              <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>必须决出胜负</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{gameDecisiveWin ? '（平局将加赛直到分出胜负）' : '（允许平局）'}</span>
+            </div>
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={() => setShowGameConfig(false)}>
+              取消
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => handleInitiateGame(pendingGameType, gameBestOf, gameDecisiveWin)}>
+              开始对战
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Global media viewer — navigates across ALL chat media */}
     {viewerUrl !== null && allChatMedia.length > 0 && (
       <MediaPreviewModal
@@ -3465,6 +3712,9 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         onIndexChange={handleViewerIndexChange}
         onClose={() => setViewerUrl(null)}
       />
+    )}
+    {activeGameId !== null && (
+      <GameRoomModal gameId={activeGameId} onClose={() => setActiveGameId(null)} />
     )}
     </ChatMediaContext.Provider>
   );
