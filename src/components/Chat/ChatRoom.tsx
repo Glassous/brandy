@@ -558,7 +558,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
   // Game Config Modal
   const [showGameConfig, setShowGameConfig] = useState(false);
-  const [pendingGameType, setPendingGameType] = useState<'rps' | 'dice'>('rps');
+  const [pendingGameType, setPendingGameType] = useState<'rps' | 'dice' | 'random'>('rps');
   const [gameBestOf, setGameBestOf] = useState(3);
   const [gameDecisiveWin, setGameDecisiveWin] = useState(false);
 
@@ -713,7 +713,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     } catch { /* ignore */ }
   }, [token]);
 
-  const openGameConfig = (gameType: 'rps' | 'dice') => {
+  const openGameConfig = (gameType: 'rps' | 'dice' | 'random') => {
     setShowUploadMenu(false);
     setPendingGameType(gameType);
     setGameBestOf(3);
@@ -721,7 +721,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     setShowGameConfig(true);
   };
 
-  const handleInitiateGame = async (gameType: 'rps' | 'dice', bestOf: number, decisiveWin: boolean) => {
+  const handleInitiateGame = async (gameType: 'rps' | 'dice' | 'random', bestOf: number, decisiveWin: boolean) => {
     setShowGameConfig(false);
     try {
       const res = await fetch(`${API_BASE}/api/games`, {
@@ -2772,6 +2772,19 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                     >
                       🎲 发起骰子对决
                     </button>
+                    <button
+                      onClick={() => openGameConfig('random')}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', width: '100%',
+                        padding: '10px 14px', fontSize: '13px', color: 'var(--text)',
+                        cursor: 'pointer', background: 'none', border: 'none',
+                        transition: 'background 0.15s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                      🔀 发起随机对战
+                    </button>
                   </div>
                 )}
               </div>
@@ -3633,7 +3646,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       <div className="modal-overlay" onClick={() => setShowGameConfig(false)}>
         <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: '380px' }}>
           <div className="modal-header">
-            <span className="modal-title">{pendingGameType === 'rps' ? '✊ 发起猜拳对战' : '🎲 发起骰子对决'}</span>
+            <span className="modal-title">{pendingGameType === 'rps' ? '✊ 发起猜拳对战' : pendingGameType === 'dice' ? '🎲 发起骰子对决' : '🔀 发起随机对战'}</span>
             <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowGameConfig(false)}><CloseIcon size={20} /></button>
           </div>
           <div className="modal-body">

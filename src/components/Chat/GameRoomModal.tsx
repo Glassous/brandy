@@ -239,6 +239,8 @@ export default function GameRoomModal({ gameId, onClose }: GameRoomModalProps) {
           border-radius: 24px;
           width: 500px;
           max-width: 92%;
+          max-height: 85vh;
+          overflow-y: auto;
           padding: 24px;
           display: flex;
           flex-direction: column;

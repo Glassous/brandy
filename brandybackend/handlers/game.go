@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -21,7 +22,7 @@ func CreateGame(c *gin.Context) {
 	userID, _ := primitive.ObjectIDFromHex(userIDStr)
 
 	var req struct {
-		Type        string `json:"type"` // "rps" or "dice"
+		Type        string `json:"type"` // "rps", "dice", or "random"
 		ChatID      string `json:"chat_id"`
 		IsGroup     bool   `json:"is_group"`
 		BestOf      int    `json:"best_of"`
@@ -31,6 +32,14 @@ func CreateGame(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
+	}
+
+	if req.Type == "random" {
+		if rand.Intn(2) == 0 {
+			req.Type = "rps"
+		} else {
+			req.Type = "dice"
+		}
 	}
 
 	if req.Type != "rps" && req.Type != "dice" {
