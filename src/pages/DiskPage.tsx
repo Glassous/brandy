@@ -61,9 +61,11 @@ export function DiskPage() {
   const [limitSpace, setLimitSpace] = useState<number>(500 * 1024 * 1024); // Upgrade default to 500M
 
   const [loading, setLoading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Tabs for main view: drive vs trash
   const [activeTab, setActiveTab] = useState<'drive' | 'trash'>('drive');
+  const [category, setCategory] = useState<string>('all');
   const [trashItems, setTrashItems] = useState<DiskItem[]>([]);
 
   // Multi Selection state (persisted per folder level)
@@ -141,7 +143,10 @@ export function DiskPage() {
     if (!token) return;
     setLoading(true);
     try {
-      const url = `${API_BASE}/api/disk/items?parent_id=${folderId || 'root'}`;
+      let url = `${API_BASE}/api/disk/items?parent_id=${folderId || 'root'}`;
+      if (category !== 'all') {
+        url += `&category=${category}`;
+      }
       const res = await fetch(url, { headers: getHeaders() });
       if (res.ok) {
         const data = await res.json();
@@ -154,7 +159,7 @@ export function DiskPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, getHeaders, showToast]);
+  }, [token, getHeaders, showToast, category]);
 
   // Fetch breadcrumbs
   const fetchBreadcrumbs = useCallback(async (folderId: string | null) => {
@@ -746,6 +751,55 @@ export function DiskPage() {
       return <FileCode size={24} />;
     }
     return <File size={24} />;
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (activeTab === 'drive') {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (activeTab !== 'drive') return;
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      const filesArray = Array.from(files);
+      const totalSelectedSize = filesArray.reduce((sum, file) => sum + file.size, 0);
+      const availableSpace = limitSpace - usedSpace;
+
+      if (totalSelectedSize > availableSpace) {
+        showToast(`选中文件总大小（${formatBytes(totalSelectedSize)}）超过剩余可用容量（${formatBytes(availableSpace)}）！`, 'error');
+        return;
+      }
+
+      setShowUploadList(true);
+      setIsUploadListMinimized(false);
+
+      filesArray.forEach(file => {
+        const taskId = Math.random().toString(36).substring(2, 9) + '-' + Date.now();
+        const newTask: UploadTask = {
+          id: taskId,
+          fileName: file.name,
+          size: file.size,
+          progress: 0,
+          status: 'pending',
+          speed: 0,
+          loaded: 0,
+          lastTime: Date.now(),
+          lastLoaded: 0,
+        };
+
+        setUploadTasks(prev => [newTask, ...prev]);
+        initiateSingleFileUpload(file, taskId);
+      });
+    }
   };
 
   return (
@@ -1500,6 +1554,32 @@ export function DiskPage() {
           </button>
         </div>
 
+        {activeTab === 'drive' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-dim)', paddingLeft: '14px', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>分类检索</span>
+            {[
+              { code: 'all', name: '全部文件', icon: <List size={16} /> },
+              { code: 'document', name: '文档', icon: <FileText size={16} /> },
+              { code: 'image', name: '图片', icon: <FileImage size={16} /> },
+              { code: 'video', name: '视频', icon: <FileVideo size={16} /> },
+              { code: 'audio', name: '音频', icon: <FileAudio size={16} /> },
+              { code: 'other', name: '其他', icon: <File size={16} /> },
+            ].map(cat => (
+              <button
+                key={cat.code}
+                className={`btn ${category === cat.code ? '' : 'btn-secondary'}`}
+                style={{ justifyContent: 'flex-start', textAlign: 'left', width: '100%', padding: '8px 14px', borderRadius: '8px', fontSize: '13px' }}
+                onClick={() => {
+                  setCategory(cat.code);
+                  setSelectionMap(new Map());
+                }}
+              >
+                {cat.icon} <span style={{ marginLeft: '8px' }}>{cat.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="usage-card" style={{ marginTop: 'auto' }}>
           <div className="usage-info">
             <span>已用容量</span>
@@ -1520,8 +1600,19 @@ export function DiskPage() {
         </div>
       </div>
 
-      {/* File Browser Panel occupies the main screen area */}
-      <main className="disk-main">
+      <main 
+        className="disk-main"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {isDragging && (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(51, 144, 236, 0.12)', border: '2.5px dashed var(--brand-blue)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, pointerEvents: 'none' }}>
+            <div style={{ background: 'var(--bg-card)', padding: '16px 24px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--brand-blue)', fontWeight: 600 }}>
+              <CloudUpload size={24} /> 释放文件以上传到当前目录
+            </div>
+          </div>
+        )}
         {/* Navigation Breadcrumbs Header & Space Usage & Controls */}
         <div className="disk-header">
           {activeTab === 'drive' && currentFolderId && (

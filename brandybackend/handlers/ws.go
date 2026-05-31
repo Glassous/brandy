@@ -705,6 +705,7 @@ func GetChats(c *gin.Context) {
 		response = append(response, models.ChatSession{
 			GroupID:     g.ID.Hex(),
 			GroupName:   gName,
+			GroupAvatar: g.Avatar,
 			IsGroup:     true,
 			LastMessage: lastMessage,
 			LastMsgTime: lastMsgTime,

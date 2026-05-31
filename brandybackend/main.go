@@ -106,6 +106,7 @@ func main() {
 		api.GET("/chats/:friend_id/messages", handlers.GetChatMessages)
 		api.POST("/chats/messages/:id/recall", handlers.RecallMessage)
 		api.PUT("/chats/messages/:id/edit", handlers.EditMessage)
+		api.GET("/chats/search", handlers.SearchMessages)
 
 		// Group chat routes
 		api.POST("/groups", handlers.CreateGroup)
@@ -125,6 +126,7 @@ func main() {
 		api.DELETE("/groups/:group_id/dissolve", handlers.DissolveGroup)
 		api.POST("/groups/:group_id/mute-all", handlers.MuteAllGroup)
 		api.POST("/groups/:group_id/mute-member", handlers.MuteGroupMember)
+		api.GET("/groups/:group_id/logs", handlers.GetGroupAuditLogs)
 
 		// Cloud Disk Routes
 		api.GET("/disk/items", handlers.GetDiskItems)

@@ -58,6 +58,13 @@ type ChangePasswordReq struct {
 type UpdateProfileReq struct {
 	Nickname           string `json:"nickname" binding:"required,min=2,max=20"`
 	CustomTransferPath string `json:"custom_transfer_path"`
+	Bio                string `json:"bio" binding:"max=100"`
+	Gender             string `json:"gender"`
+	Birthday           string `json:"birthday"`
+	Country            string `json:"country"`
+	City               string `json:"city"`
+	Website            string `json:"website"`
+	Job                string `json:"job"`
 }
 
 func generateCode() string {
@@ -460,6 +467,13 @@ func GetProfile(c *gin.Context) {
 		CustomTransferPath: user.CustomTransferPath,
 		Role:               user.Role,
 		CreatedAt:          user.CreatedAt,
+		Bio:                user.Bio,
+		Gender:             user.Gender,
+		Birthday:           user.Birthday,
+		Country:            user.Country,
+		City:               user.City,
+		Website:            user.Website,
+		Job:                user.Job,
 	})
 }
 
@@ -484,6 +498,13 @@ func UpdateProfile(c *gin.Context) {
 	updateFields := bson.M{
 		"nickname":             strings.TrimSpace(req.Nickname),
 		"custom_transfer_path": strings.TrimSpace(req.CustomTransferPath),
+		"bio":                  strings.TrimSpace(req.Bio),
+		"gender":               strings.TrimSpace(req.Gender),
+		"birthday":             strings.TrimSpace(req.Birthday),
+		"country":              strings.TrimSpace(req.Country),
+		"city":                 strings.TrimSpace(req.City),
+		"website":              strings.TrimSpace(req.Website),
+		"job":                  strings.TrimSpace(req.Job),
 	}
 
 	_, err = collection.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{"$set": updateFields})

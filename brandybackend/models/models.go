@@ -17,6 +17,13 @@ type User struct {
 	IsAI               bool               `bson:"is_ai,omitempty" json:"is_ai,omitempty"`
 	Role               string             `bson:"role,omitempty" json:"role,omitempty"`
 	CreatedAt          time.Time          `bson:"created_at" json:"created_at"`
+	Bio                string             `bson:"bio" json:"bio"`
+	Gender             string             `bson:"gender" json:"gender"`
+	Birthday           string             `bson:"birthday" json:"birthday"`
+	Country            string             `bson:"country" json:"country"`
+	City               string             `bson:"city" json:"city"`
+	Website            string             `bson:"website" json:"website"`
+	Job                string             `bson:"job" json:"job"`
 }
 
 type Friend struct {
@@ -68,6 +75,7 @@ type Group struct {
 	MuteAll      bool                 `bson:"mute_all" json:"mute_all"`
 	MutedMembers map[string]MuteInfo  `bson:"muted_members,omitempty" json:"muted_members,omitempty"`
 	CreatedAt    time.Time            `bson:"created_at" json:"created_at"`
+	Avatar       string               `bson:"avatar" json:"avatar"`
 }
 
 // REST request/response shapes helper
@@ -80,6 +88,13 @@ type UserResponse struct {
 	IsAI               bool      `json:"is_ai,omitempty"`
 	Role               string    `json:"role,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
+	Bio                string    `json:"bio"`
+	Gender             string    `json:"gender"`
+	Birthday           string    `json:"birthday"`
+	Country            string    `json:"country"`
+	City               string    `json:"city"`
+	Website            string    `json:"website"`
+	Job                string    `json:"job"`
 }
 
 type GroupResponse struct {
@@ -93,6 +108,7 @@ type GroupResponse struct {
 	MuteAll      bool               `json:"mute_all"`
 	MutedMembers map[string]MuteInfo  `json:"muted_members,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
+	Avatar       string             `json:"avatar"`
 }
 
 type ChatSession struct {
@@ -134,6 +150,7 @@ type DiskItem struct {
 	DeletedAt       *time.Time          `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
 	CreatedAt       time.Time           `bson:"created_at" json:"created_at"`
 	UpdatedAt       time.Time           `bson:"updated_at" json:"updated_at"`
+	GroupID         *primitive.ObjectID `bson:"group_id,omitempty" json:"group_id,omitempty"`
 }
 
 type AIMember struct {
@@ -153,5 +170,14 @@ type AIMemberResponse struct {
 	Avatar      string    `json:"avatar"`
 	UserID      string    `json:"user_id"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type GroupAuditLog struct {
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	GroupID    primitive.ObjectID `bson:"group_id" json:"group_id"`
+	OperatorID primitive.ObjectID `bson:"operator_id" json:"operator_id"`
+	Action     string             `bson:"action" json:"action"`
+	Details    string             `bson:"details" json:"details"`
+	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
 }
 

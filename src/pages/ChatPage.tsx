@@ -1,9 +1,10 @@
-import { useMemo, useCallback, useState } from 'react';
+import { useMemo, useCallback, useState, useEffect } from 'react';
 import { useApp, type ChatSession } from '../contexts/AppContext';
 import { ChatList } from '../components/Chat/ChatList';
 import { ChatRoom } from '../components/Chat/ChatRoom';
 import { Avatar } from '../components/shared/Avatar';
 import { CloseIcon } from '../components/shared/Icons';
+import { API_BASE } from '../config';
 
 export function ChatPage() {
   const {
@@ -22,11 +23,43 @@ export function ChatPage() {
     togglePinChat,
     createGroup,
     startChat,
+    token,
   } = useApp();
 
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [selectedFriends, setSelectedFriends] = useState<string[]>([]);
+
+  // Global search states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleClick = () => setShowSearchDropdown(false);
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/chats/search?query=${encodeURIComponent(query)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setSearchResults(await res.json());
+      }
+    } catch { /* ignore */ }
+    finally { setIsSearching(false); }
+  };
 
   const handleSelectFriend = (friendId: string | null) => {
     if (activeChatFriendId === friendId) {
@@ -333,6 +366,64 @@ export function ChatPage() {
             </svg>
           </button>
         </div>
+        
+        {/* Global message search bar */}
+        <div onClick={e => e.stopPropagation()} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg)', position: 'relative' }}>
+          <input 
+            placeholder="搜索全局消息..." 
+            value={searchQuery}
+            onChange={e => {
+              const val = e.target.value;
+              setSearchQuery(val);
+              handleSearch(val);
+              setShowSearchDropdown(true);
+            }}
+            onFocus={() => setShowSearchDropdown(true)}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: '16px', border: '1px solid var(--border)', background: 'var(--bg-paper)', color: 'var(--text)', fontSize: '13px', outline: 'none' }}
+          />
+          
+          {showSearchDropdown && searchQuery.trim() && (
+            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.15)', zIndex: 1000, maxHeight: '300px', overflowY: 'auto', margin: '4px 12px 0 12px' }}>
+              {isSearching ? (
+                <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>搜索中...</div>
+              ) : searchResults.length === 0 ? (
+                <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>无匹配结果</div>
+              ) : (
+                searchResults.map((res: any) => {
+                  const name = res.is_group ? res.group_name : res.sender_name;
+                  const avatar = res.is_group ? res.group_avatar : res.sender_avatar;
+                  return (
+                    <div 
+                      key={res.id} 
+                      onClick={() => {
+                        const targetId = res.is_group ? res.group_id : (res.sender_id === user?.id ? res.friend_id : res.sender_id);
+                        startChat(targetId, res.is_group ? res.group_name : res.sender_name, res.is_group);
+                        setHighlightedMessageId(res.id);
+                        setShowSearchDropdown(false);
+                        setSearchQuery('');
+                      }}
+                      style={{ display: 'flex', gap: '8px', padding: '10px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border-light)', transition: 'background 0.2s' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <Avatar name={name} url={avatar} size={28} />
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+                          <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{new Date(res.created_at).toLocaleDateString()}</span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <strong>{res.sender_name}</strong>: {res.content.startsWith('{') ? '[文件/媒体]' : res.content}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="chat-sidebar-list">
           <ChatList
             chats={displayedChats}
@@ -359,6 +450,8 @@ export function ChatPage() {
             onSend={handleSend}
             onLoad={handleLoad}
             onBack={() => setActiveChatFriendId(null)}
+            highlightedMessageId={highlightedMessageId}
+            onClearHighlight={() => setHighlightedMessageId(null)}
           />
         ) : (
           <div className="chat-placeholder">

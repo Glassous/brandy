@@ -551,6 +551,7 @@ func GetAdminGroups(c *gin.Context) {
 			Admins:    adminStrs,
 			Members:   members,
 			CreatedAt: g.CreatedAt,
+			Avatar:    g.Avatar,
 		})
 	}
 

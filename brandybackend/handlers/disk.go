@@ -81,7 +81,7 @@ func calculateUsedSpace(ctx context.Context, userID primitive.ObjectID) (int64, 
 	return totalSize, nil
 }
 
-// 1. 获取当前目录下文件与文件夹列表
+// 1. 获取当前目录下文件与文件夹列表 (支持 group_id 及 category 分类检索)
 func GetDiskItems(c *gin.Context) {
 	userIDStr := c.GetString("userID")
 	userID, _ := primitive.ObjectIDFromHex(userIDStr)
@@ -99,18 +99,64 @@ func GetDiskItems(c *gin.Context) {
 		parentFilter = pid
 	}
 
+	groupIDStr := c.Query("group_id")
+	var groupIDFilter *primitive.ObjectID
+	if groupIDStr != "" {
+		gid, err := primitive.ObjectIDFromHex(groupIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group_id"})
+			return
+		}
+		// Verify membership
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": gid, "members": userID}).Decode(&group)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+			return
+		}
+		groupIDFilter = &gid
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	filter := bson.M{
-		"user_id":    userID,
-		"parent_id":  parentFilter,
 		"is_deleted": bson.M{"$ne": true},
+	}
+
+	if groupIDFilter != nil {
+		filter["group_id"] = *groupIDFilter
+	} else {
+		filter["user_id"] = userID
+		filter["group_id"] = nil
+	}
+
+	category := c.Query("category")
+	if category != "" {
+		filter["type"] = "file"
+		var regex string
+		switch category {
+		case "image":
+			regex = `\.(jpg|jpeg|png|gif|webp|svg)$`
+		case "video":
+			regex = `\.(mp4|mkv|avi|mov|wmv)$`
+		case "audio":
+			regex = `\.(mp3|wav|flac|ogg|wma)$`
+		case "document":
+			regex = `\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|html)$`
+		default:
+			regex = `\.(?!(jpg|jpeg|png|gif|webp|svg|mp4|mkv|avi|mov|wmv|mp3|wav|flac|ogg|wma|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|html)$)[a-zA-Z0-9]+$`
+		}
+		filter["name"] = bson.M{"$regex": regex, "$options": "i"}
+	} else {
+		filter["parent_id"] = parentFilter
 	}
 
 	// Sort: folders first, then files, then sort by name/created_at
 	opts := options.Find().SetSort(bson.D{
-		{Key: "type", Value: -1}, // "folder" is lexicographically greater than "file" ? Wait, "folder" vs "file": f-o vs f-i. Folder comes first if descending? "folder" > "file". Yes, descending: folder (o) first, file (i) second.
+		{Key: "type", Value: -1},
 		{Key: "created_at", Value: -1},
 	})
 
@@ -150,10 +196,11 @@ func GetDiskUsage(c *gin.Context) {
 	})
 }
 
-// 3. 创建文件夹
+// 3. 创建文件夹 (支持 group_id)
 type CreateFolderReq struct {
 	Name     string `json:"name" binding:"required"`
 	ParentID string `json:"parent_id"`
+	GroupID  string `json:"group_id"`
 }
 
 func CreateFolder(c *gin.Context) {
@@ -178,17 +225,43 @@ func CreateFolder(c *gin.Context) {
 		parentFilter = pid
 	}
 
+	var groupIDFilter *primitive.ObjectID
+	if req.GroupID != "" {
+		gid, err := primitive.ObjectIDFromHex(req.GroupID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group_id"})
+			return
+		}
+		// Verify membership
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": gid, "members": userID}).Decode(&group)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+			return
+		}
+		groupIDFilter = &gid
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Check if same name folder exists in the same parent directory
+	// Check if same name folder exists in the same parent directory in this scope
 	collection := db.MongoDB.Collection("disk_items")
-	err := collection.FindOne(ctx, bson.M{
-		"user_id":   userID,
+	dupFilter := bson.M{
 		"parent_id": parentFilter,
 		"name":      req.Name,
 		"type":      "folder",
-	}).Err()
+	}
+	if groupIDFilter != nil {
+		dupFilter["group_id"] = *groupIDFilter
+	} else {
+		dupFilter["user_id"] = userID
+		dupFilter["group_id"] = nil
+	}
+
+	err := collection.FindOne(ctx, dupFilter).Err()
 	if err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "同名文件夹已存在"})
 		return
@@ -202,6 +275,7 @@ func CreateFolder(c *gin.Context) {
 		Size:      0,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
+		GroupID:   groupIDFilter,
 	}
 
 	if parentFilter != nil {
@@ -218,11 +292,12 @@ func CreateFolder(c *gin.Context) {
 	c.JSON(http.StatusOK, newFolder)
 }
 
-// 4. 获取上传临时凭据
+// 4. 获取上传临时凭据 (支持 group_id)
 type UploadCredentialReq struct {
 	Filename string `json:"filename" binding:"required"`
 	Size     int64  `json:"size" binding:"required"`
 	ParentID string `json:"parent_id"`
+	GroupID  string `json:"group_id"`
 }
 
 func GetUploadCredential(c *gin.Context) {
@@ -235,10 +310,29 @@ func GetUploadCredential(c *gin.Context) {
 		return
 	}
 
+	var groupIDFilter *primitive.ObjectID
+	if req.GroupID != "" {
+		gid, err := primitive.ObjectIDFromHex(req.GroupID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group_id"})
+			return
+		}
+		// Verify membership
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": gid, "members": userID}).Decode(&group)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+			return
+		}
+		groupIDFilter = &gid
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 1. Verify user capacity
+	// 1. Verify user capacity (for both personal and group uploads, verify against uploader capacity)
 	usedSpace, err := calculateUsedSpace(ctx, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify usage space"})
@@ -253,7 +347,12 @@ func GetUploadCredential(c *gin.Context) {
 	// 2. Generate unique cosKey
 	ext := strings.ToLower(filepath.Ext(req.Filename))
 	uuidStr := uuid.New().String()
-	cosKey := fmt.Sprintf("disk/%s/%s%s", userID.Hex(), uuidStr, ext)
+	var cosKey string
+	if groupIDFilter != nil {
+		cosKey = fmt.Sprintf("disk/group/%s/%s%s", groupIDFilter.Hex(), uuidStr, ext)
+	} else {
+		cosKey = fmt.Sprintf("disk/%s/%s%s", userID.Hex(), uuidStr, ext)
+	}
 
 	// 3. Get COS config
 	secretID := os.Getenv("COS_SECRET_ID")
@@ -277,11 +376,10 @@ func GetUploadCredential(c *gin.Context) {
 	stsClient := sts.NewClient(secretID, secretKey, nil)
 
 	// 5. Define Credential Policy
-	// Resource format: qcs::cos:<region>:uid/<appid>:<bucket>/<path>
 	resourceArn := fmt.Sprintf("qcs::cos:%s:uid/%s:%s/%s", region, appid, bucket, cosKey)
 
 	opt := &sts.CredentialOptions{
-		DurationSeconds: int64(30 * time.Minute.Seconds()), // 30 minutes
+		DurationSeconds: int64(30 * time.Minute.Seconds()),
 		Region:          region,
 		Policy: &sts.CredentialPolicy{
 			Statement: []sts.CredentialPolicyStatement{
@@ -331,13 +429,14 @@ func GetUploadCredential(c *gin.Context) {
 	})
 }
 
-// 4b. 确认文件直传完成并校验元数据
+// 4b. 确认文件直传完成并校验元数据 (支持 group_id)
 type UploadCompleteReq struct {
 	Filename string `json:"filename" binding:"required"`
 	Size     int64  `json:"size" binding:"required"`
 	ParentID string `json:"parent_id"`
 	CosKey   string `json:"cos_key" binding:"required"`
 	URL      string `json:"url" binding:"required"`
+	GroupID  string `json:"group_id"`
 }
 
 func CompleteUploadDiskFile(c *gin.Context) {
@@ -350,8 +449,32 @@ func CompleteUploadDiskFile(c *gin.Context) {
 		return
 	}
 
-	// 1. Verify cosKey matches the user ID to prevent path traversal/hijacking
-	expectedPrefix := fmt.Sprintf("disk/%s/", userID.Hex())
+	var groupIDFilter *primitive.ObjectID
+	if req.GroupID != "" {
+		gid, err := primitive.ObjectIDFromHex(req.GroupID)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group_id"})
+			return
+		}
+		// Verify membership
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": gid, "members": userID}).Decode(&group)
+		if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+			return
+		}
+		groupIDFilter = &gid
+	}
+
+	// 1. Verify cosKey prefix
+	var expectedPrefix string
+	if groupIDFilter != nil {
+		expectedPrefix = fmt.Sprintf("disk/group/%s/", groupIDFilter.Hex())
+	} else {
+		expectedPrefix = fmt.Sprintf("disk/%s/", userID.Hex())
+	}
 	if !strings.HasPrefix(req.CosKey, expectedPrefix) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Invalid COS Key path"})
 		return
@@ -360,7 +483,7 @@ func CompleteUploadDiskFile(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// 2. Fetch the object metadata from COS to verify its existence and size
+	// 2. Fetch the object metadata from COS
 	client, _, _, _, err := getCOSClient()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "COS configuration error: " + err.Error()})
@@ -379,7 +502,7 @@ func CompleteUploadDiskFile(c *gin.Context) {
 		return
 	}
 
-	// 3. Double-check user capacity with actual size
+	// 3. Double-check user capacity
 	usedSpace, err := calculateUsedSpace(ctx, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify usage space"})
@@ -387,7 +510,6 @@ func CompleteUploadDiskFile(c *gin.Context) {
 	}
 
 	if usedSpace+actualSize > DiskLimit {
-		// Clean up the uploaded object on COS since it exceeds quota
 		_, _ = client.Object.Delete(ctx, req.CosKey)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "云盘空间不足（限额 500MB）"})
 		return
@@ -415,6 +537,7 @@ func CompleteUploadDiskFile(c *gin.Context) {
 		URL:       req.URL,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
+		GroupID:   groupIDFilter,
 	}
 
 	_, err = db.MongoDB.Collection("disk_items").InsertOne(ctx, newItem)
@@ -453,9 +576,9 @@ func RenameDiskItem(c *gin.Context) {
 
 	collection := db.MongoDB.Collection("disk_items")
 
-	// Verify ownership
+	// Get item
 	var item models.DiskItem
-	err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID}).Decode(&item)
+	err = collection.FindOne(ctx, bson.M{"_id": itemID}).Decode(&item)
 	if err == mongo.ErrNoDocuments {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
@@ -464,14 +587,45 @@ func RenameDiskItem(c *gin.Context) {
 		return
 	}
 
-	// Check for duplicate name in the same parent directory
-	err = collection.FindOne(ctx, bson.M{
-		"user_id":   userID,
+	// Verify permission: owner, or if group item, owner/admin of that group
+	isAuthorized := item.UserID == userID
+	if !isAuthorized && item.GroupID != nil {
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": *item.GroupID}).Decode(&group)
+		if err == nil {
+			if group.OwnerID == userID {
+				isAuthorized = true
+			} else {
+				for _, adminID := range group.Admins {
+					if adminID == userID {
+						isAuthorized = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to modify this item"})
+		return
+	}
+
+	// Check for duplicate name in the same parent directory and scope
+	dupFilter := bson.M{
 		"parent_id": item.ParentID,
 		"name":      req.Name,
 		"type":      item.Type,
 		"_id":       bson.M{"$ne": itemID},
-	}).Err()
+	}
+	if item.GroupID != nil {
+		dupFilter["group_id"] = *item.GroupID
+	} else {
+		dupFilter["user_id"] = userID
+		dupFilter["group_id"] = nil
+	}
+
+	err = collection.FindOne(ctx, dupFilter).Err()
 	if err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "同名文件或文件夹在此目录下已存在"})
 		return
@@ -508,14 +662,38 @@ func DeleteDiskItem(c *gin.Context) {
 
 	collection := db.MongoDB.Collection("disk_items")
 
-	// Verify ownership
+	// Get item
 	var item models.DiskItem
-	err = collection.FindOne(ctx, bson.M{"_id": itemID, "user_id": userID}).Decode(&item)
+	err = collection.FindOne(ctx, bson.M{"_id": itemID}).Decode(&item)
 	if err == mongo.ErrNoDocuments {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Item not found"})
 		return
 	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Query failed"})
+		return
+	}
+
+	// Verify permission: owner, or if group item, owner/admin of that group
+	isAuthorized := item.UserID == userID
+	if !isAuthorized && item.GroupID != nil {
+		var group models.Group
+		err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": *item.GroupID}).Decode(&group)
+		if err == nil {
+			if group.OwnerID == userID {
+				isAuthorized = true
+			} else {
+				for _, adminID := range group.Admins {
+					if adminID == userID {
+						isAuthorized = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not have permission to delete this item"})
 		return
 	}
 

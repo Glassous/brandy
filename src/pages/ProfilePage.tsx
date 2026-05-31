@@ -179,7 +179,6 @@ export function ProfilePage() {
             <div className="pf-hero-name">{user?.nickname || '用户'}</div>
             <div className="pf-hero-username">@{user?.username}</div>
           </div>
-          <ChevronRightIcon size={18} color="var(--text-dim)" />
         </div>
 
         {/* Settings Group */}

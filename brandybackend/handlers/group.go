@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -24,7 +25,8 @@ type CreateGroupReq struct {
 }
 
 type UpdateGroupReq struct {
-	Name string `json:"name" binding:"required"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar"`
 }
 
 type AddGroupMembersReq struct {
@@ -80,6 +82,8 @@ func CreateGroup(c *gin.Context) {
 		return
 	}
 
+	writeGroupAuditLog(ctx, newGroup.ID, currentUserID, "create", "创建了群聊: "+newGroup.Name)
+
 	// Resolve member details for response
 	var members []models.UserResponse
 	cursor, err := db.MongoDB.Collection("users").Find(ctx, bson.M{"_id": bson.M{"$in": memberIDs}})
@@ -106,6 +110,7 @@ func CreateGroup(c *gin.Context) {
 		Admins:    make([]string, 0),
 		Members:   members,
 		CreatedAt: newGroup.CreatedAt,
+		Avatar:    newGroup.Avatar,
 	})
 }
 
@@ -161,6 +166,7 @@ func GetGroups(c *gin.Context) {
 			Admins:    admins,
 			Members:   members,
 			CreatedAt: g.CreatedAt,
+			Avatar:    g.Avatar,
 		})
 	}
 
@@ -250,6 +256,7 @@ func GetGroupDetail(c *gin.Context) {
 		MuteAll:      group.MuteAll,
 		MutedMembers: group.MutedMembers,
 		CreatedAt:    group.CreatedAt,
+		Avatar:       group.Avatar,
 	})
 }
 
@@ -284,7 +291,7 @@ func UpdateGroup(c *gin.Context) {
 		return
 	}
 
-	// Verify permissions: only Owner or Admins can update name
+	// Verify permissions: only Owner or Admins can update name/avatar
 	isAuthorized := group.OwnerID == currentUserID
 	if !isAuthorized {
 		for _, adminID := range group.Admins {
@@ -296,22 +303,45 @@ func UpdateGroup(c *gin.Context) {
 	}
 
 	if !isAuthorized {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can change group name"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can change group information"})
 		return
 	}
 
-	// Update Group Name
+	updateFields := bson.M{}
+	nameChanged := false
+	avatarChanged := false
+	if req.Name != "" && strings.TrimSpace(req.Name) != group.Name {
+		updateFields["name"] = strings.TrimSpace(req.Name)
+		nameChanged = true
+	}
+	if req.Avatar != "" && strings.TrimSpace(req.Avatar) != group.Avatar {
+		updateFields["avatar"] = strings.TrimSpace(req.Avatar)
+		avatarChanged = true
+	}
+
+	if len(updateFields) == 0 {
+		c.JSON(http.StatusOK, gin.H{"message": "No changes made"})
+		return
+	}
+
 	_, err = db.MongoDB.Collection("groups").UpdateOne(
 		ctx,
 		bson.M{"_id": groupID},
-		bson.M{"$set": bson.M{"name": strings.TrimSpace(req.Name)}},
+		bson.M{"$set": updateFields},
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update group name"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update group information"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Group name updated successfully"})
+	if nameChanged {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "rename", "修改群名为: "+strings.TrimSpace(req.Name))
+	}
+	if avatarChanged {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "update_avatar", "更新了群头像")
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Group updated successfully"})
 }
 
 func AddGroupMembers(c *gin.Context) {
@@ -369,6 +399,8 @@ func AddGroupMembers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add group members"})
 		return
 	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "add_member", fmt.Sprintf("邀请了 %d 名新成员入群", len(newMemberIDs)))
 
 	c.JSON(http.StatusOK, gin.H{"message": "Members added successfully"})
 }
@@ -483,6 +515,20 @@ func RemoveGroupMember(c *gin.Context) {
 		}
 	}
 
+	// Fetch target user's nickname for logging
+	var targetUser models.User
+	_ = db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": targetUserID}).Decode(&targetUser)
+	targetName := targetUser.Nickname
+	if targetName == "" {
+		targetName = targetUserIDStr
+	}
+
+	if isSelfLeave {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "leave", "退出了群聊")
+	} else {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "kick", fmt.Sprintf("将成员 %s 移出了群聊", targetName))
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Member removed successfully"})
 }
 
@@ -548,6 +594,16 @@ func AddGroupAdmin(c *gin.Context) {
 		return
 	}
 
+	// Fetch target user's nickname for logging
+	var targetUser models.User
+	_ = db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": targetUserID}).Decode(&targetUser)
+	targetName := targetUser.Nickname
+	if targetName == "" {
+		targetName = req.UserID
+	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "add_admin", fmt.Sprintf("将成员 %s 设为管理员", targetName))
+
 	c.JSON(http.StatusOK, gin.H{"message": "Administrator added successfully"})
 }
 
@@ -593,6 +649,16 @@ func RemoveGroupAdmin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove administrator"})
 		return
 	}
+
+	// Fetch target user's nickname for logging
+	var targetUser models.User
+	_ = db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": targetUserID}).Decode(&targetUser)
+	targetName := targetUser.Nickname
+	if targetName == "" {
+		targetName = targetUserIDStr
+	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "remove_admin", fmt.Sprintf("取消了成员 %s 的管理员身份", targetName))
 
 	c.JSON(http.StatusOK, gin.H{"message": "Administrator removed successfully"})
 }
@@ -764,6 +830,21 @@ func AddAIMember(c *gin.Context) {
 		return
 	}
 
+	// Verify permissions: only Owner or Admins can add AI members
+	isAuthorized := group.OwnerID == currentUserID
+	if !isAuthorized {
+		for _, adminID := range group.Admins {
+			if adminID == currentUserID {
+				isAuthorized = true
+				break
+			}
+		}
+	}
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can add AI members"})
+		return
+	}
+
 	// Check if AI member name already exists in this group
 	var existingAI models.AIMember
 	err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{
@@ -807,6 +888,8 @@ func AddAIMember(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create AI member"})
 		return
 	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "add_ai", "添加了AI虚拟成员: "+req.Name)
 
 	c.JSON(http.StatusCreated, models.AIMemberResponse{
 		ID:          aiMember.ID.Hex(),
@@ -910,6 +993,21 @@ func UpdateAIMember(c *gin.Context) {
 		return
 	}
 
+	// Verify permissions: only Owner or Admins can update AI members
+	isAuthorized := group.OwnerID == currentUserID
+	if !isAuthorized {
+		for _, adminID := range group.Admins {
+			if adminID == currentUserID {
+				isAuthorized = true
+				break
+			}
+		}
+	}
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can modify AI members"})
+		return
+	}
+
 	// Check if AI member exists
 	var aiMember models.AIMember
 	err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{"_id": aiID, "group_id": groupID}).Decode(&aiMember)
@@ -950,7 +1048,7 @@ func UpdateAIMember(c *gin.Context) {
 		return
 	}
 
-	// Update virtual user nickname
+	// Update virtual user nickname and avatar
 	_, err = db.MongoDB.Collection("users").UpdateOne(
 		ctx,
 		bson.M{"_id": aiMember.UserID},
@@ -959,6 +1057,8 @@ func UpdateAIMember(c *gin.Context) {
 	if err != nil {
 		log.Printf("Failed to update AI user: %v", err)
 	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "update_ai", "更新了AI成员信息: "+req.Name)
 
 	c.JSON(http.StatusOK, gin.H{"message": "AI member updated successfully"})
 }
@@ -995,6 +1095,21 @@ func RemoveAIMember(c *gin.Context) {
 		return
 	}
 
+	// Verify permissions: only Owner or Admins can remove AI members
+	isAuthorized := group.OwnerID == currentUserID
+	if !isAuthorized {
+		for _, adminID := range group.Admins {
+			if adminID == currentUserID {
+				isAuthorized = true
+				break
+			}
+		}
+	}
+	if !isAuthorized {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only group owner or administrators can remove AI members"})
+		return
+	}
+
 	// Check if AI member exists
 	var aiMember models.AIMember
 	err = db.MongoDB.Collection("ai_members").FindOne(ctx, bson.M{"_id": aiID, "group_id": groupID}).Decode(&aiMember)
@@ -1018,6 +1133,8 @@ func RemoveAIMember(c *gin.Context) {
 	if err != nil {
 		log.Printf("Failed to delete AI user: %v", err)
 	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "remove_ai", "移除了AI虚拟成员: "+aiMember.Name)
 
 	c.JSON(http.StatusOK, gin.H{"message": "AI member removed successfully"})
 }
@@ -1093,6 +1210,8 @@ func UpdateGroupAnnouncement(c *gin.Context) {
 	for _, mID := range group.Members {
 		db.RedisClient.Publish(context.Background(), "user_messages:"+mID.Hex(), wsMsgBytes)
 	}
+
+	writeGroupAuditLog(ctx, groupID, currentUserID, "announcement_update", "更新了群公告")
 
 	c.JSON(http.StatusOK, gin.H{"message": "Announcement updated successfully"})
 }
@@ -1200,6 +1319,12 @@ func MuteAllGroup(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update mute all status"})
 		return
+	}
+
+	if req.MuteAll {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "mute_all", "开启了全员禁言")
+	} else {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "unmute_all", "关闭了全员禁言")
 	}
 
 	// Broadcast group_mute_all event
@@ -1341,6 +1466,20 @@ func MuteGroupMember(c *gin.Context) {
 		}
 	}
 
+	// Fetch target user's nickname for logging
+	var targetUser models.User
+	_ = db.MongoDB.Collection("users").FindOne(ctx, bson.M{"_id": targetUserID}).Decode(&targetUser)
+	targetName := targetUser.Nickname
+	if targetName == "" {
+		targetName = targetUserIDStr
+	}
+
+	if req.Mute {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "mute_member", fmt.Sprintf("对成员 %s 开启了禁言", targetName))
+	} else {
+		writeGroupAuditLog(ctx, groupID, currentUserID, "unmute_member", fmt.Sprintf("对成员 %s 解除了禁言", targetName))
+	}
+
 	// Broadcast group_mute_member event
 	eventData := gin.H{
 		"group_id": groupIDStr,
@@ -1357,4 +1496,109 @@ func MuteGroupMember(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Member mute status updated successfully"})
+}
+
+func writeGroupAuditLog(ctx context.Context, groupID primitive.ObjectID, operatorID primitive.ObjectID, action string, details string) {
+	logEntry := models.GroupAuditLog{
+		ID:         primitive.NewObjectID(),
+		GroupID:    groupID,
+		OperatorID: operatorID,
+		Action:     action,
+		Details:    details,
+		CreatedAt:  time.Now(),
+	}
+	_, err := db.MongoDB.Collection("group_audit_logs").InsertOne(ctx, logEntry)
+	if err != nil {
+		log.Printf("Failed to write group audit log: %v", err)
+	}
+}
+
+func GetGroupAuditLogs(c *gin.Context) {
+	groupIDStr := c.Param("group_id")
+	groupID, err := primitive.ObjectIDFromHex(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid group ID"})
+		return
+	}
+
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Verify group membership
+	var group models.Group
+	err = db.MongoDB.Collection("groups").FindOne(ctx, bson.M{"_id": groupID, "members": userID}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You are not a member of this group"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	// Fetch logs sorted by created_at desc
+	opts := options.Find().SetSort(bson.M{"created_at": -1})
+	cursor, err := db.MongoDB.Collection("group_audit_logs").Find(ctx, bson.M{"group_id": groupID}, opts)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch audit logs"})
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var dbLogs []models.GroupAuditLog
+	if err = cursor.All(ctx, &dbLogs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode audit logs"})
+		return
+	}
+
+	// Resolve operators nicknames for display
+	userIDs := make([]primitive.ObjectID, 0)
+	for _, l := range dbLogs {
+		userIDs = append(userIDs, l.OperatorID)
+	}
+
+	userMap := make(map[string]string)
+	if len(userIDs) > 0 {
+		userCursor, err := db.MongoDB.Collection("users").Find(ctx, bson.M{"_id": bson.M{"$in": userIDs}})
+		if err == nil {
+			var users []models.User
+			if userCursor.All(ctx, &users) == nil {
+				for _, u := range users {
+					userMap[u.ID.Hex()] = u.Nickname
+				}
+			}
+			userCursor.Close(ctx)
+		}
+	}
+
+	type LogResponse struct {
+		ID           string    `json:"id"`
+		GroupID      string    `json:"group_id"`
+		OperatorID   string    `json:"operator_id"`
+		OperatorName string    `json:"operator_name"`
+		Action       string    `json:"action"`
+		Details      string    `json:"details"`
+		CreatedAt    time.Time `json:"created_at"`
+	}
+
+	response := make([]LogResponse, 0)
+	for _, l := range dbLogs {
+		name, exists := userMap[l.OperatorID.Hex()]
+		if !exists {
+			name = "未知用户"
+		}
+		response = append(response, LogResponse{
+			ID:           l.ID.Hex(),
+			GroupID:      l.GroupID.Hex(),
+			OperatorID:   l.OperatorID.Hex(),
+			OperatorName: name,
+			Action:       l.Action,
+			Details:      l.Details,
+			CreatedAt:    l.CreatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
 }

@@ -12,6 +12,7 @@ import PendingFilesBar, { type PendingFile } from './PendingFilesBar';
 import ChatBundleCard from './ChatBundleCard';
 import MediaPreviewModal from './MediaPreviewModal';
 import { ChatMediaContext, type MediaItem } from './ChatMediaContext';
+import { Folder, File, Trash2, Upload, Plus, Edit3, ArrowLeft } from 'lucide-react';
 
 interface ChatRoomProps {
   currentUserId: string;
@@ -23,6 +24,8 @@ interface ChatRoomProps {
   onSend: (chatId: string, content: string) => void;
   onLoad: (chatId: string, isGroup?: boolean) => Promise<void>;
   onBack?: () => void;
+  highlightedMessageId?: string | null;
+  onClearHighlight?: () => void;
 }
 
 interface FileShareData {
@@ -354,8 +357,39 @@ function ChatFileCard({ data }: { data: ChatFileData }) {
   );
 }
 
-export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar, messages, onSend, onLoad, onBack }: ChatRoomProps) {
+export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar, messages, onSend, onLoad, onBack, highlightedMessageId, onClearHighlight }: ChatRoomProps) {
   const [text, setText] = useState('');
+  // Group settings view tab state
+  const [settingsTab, setSettingsTab] = useState<'main' | 'drive' | 'logs'>('main');
+
+  // Group Shared Drive States
+  const [driveFolderId, setDriveFolderId] = useState<string | null>(null);
+  const [driveItems, setDriveItems] = useState<any[]>([]);
+  const [driveBreadcrumbs, setDriveBreadcrumbs] = useState<any[]>([]);
+  const [driveLoading, setDriveLoading] = useState(false);
+  const [showNewDriveFolder, setShowNewDriveFolder] = useState(false);
+  const [newDriveFolderName, setNewDriveFolderName] = useState('');
+  const groupDriveFileInputRef = useRef<HTMLInputElement>(null);
+  const [driveUploading, setDriveUploading] = useState(false);
+  const [driveUploadProgress, setDriveUploadProgress] = useState(0);
+
+  // Group Audit Logs States
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+
+  // AI Member Editing States
+  const [editingAI, setEditingAI] = useState<any>(null);
+  const [editingAIName, setEditingAIName] = useState('');
+  const [editingAIPersonality, setEditingAIPersonality] = useState('');
+  const [editingAIAvatar, setEditingAIAvatar] = useState('');
+  const editingAIAvatarInputRef = useRef<HTMLInputElement>(null);
+  const [aiAvatarUploading, setAiAvatarUploading] = useState(false);
+
+  // Group Avatar Input
+  const groupAvatarInputRef = useRef<HTMLInputElement>(null);
+
+  // Chat drag and drop upload
+  const [chatDragging, setChatDragging] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const {
@@ -382,7 +416,8 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     dissolveGroup,
     muteAllGroup,
     muteGroupMember,
-    groupUpdateTrigger
+    groupUpdateTrigger,
+    fetchChats
   } = useApp();
   const { showToast } = useToast();
 
@@ -505,34 +540,349 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
     return () => window.removeEventListener('popstate', onPopState);
   }, [showGroupSettings]);
 
-  // Load chat and fetch group info
-  useEffect(() => {
+  const refreshGroupDetail = useCallback(async () => {
     if (isGroup) {
-      const getDetail = async () => {
-        const detail = await fetchGroupDetail(chatId);
-        setGroupDetail(detail);
-        // Load AI members
-        const aiMembersList = await getAIMembers(chatId);
-        setAIMembers(aiMembersList || []);
-      };
-      getDetail();
+      const detail = await fetchGroupDetail(chatId);
+      setGroupDetail(detail);
+      const aiMembersList = await getAIMembers(chatId);
+      setAIMembers(aiMembersList || []);
     } else {
       setGroupDetail(null);
       setAIMembers([]);
     }
-  }, [chatId, isGroup, fetchGroupDetail, getAIMembers, groupUpdateTrigger]);
+  }, [chatId, isGroup, fetchGroupDetail, getAIMembers]);
 
-  // useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
-  const refreshGroupDetail = async () => {
+  // Load chat and fetch group info
+  useEffect(() => {
+    refreshGroupDetail();
     if (isGroup) {
-      const detail = await fetchGroupDetail(chatId);
-      setGroupDetail(detail);
-      // Also refresh AI members
-      const aiMembersList = await getAIMembers(chatId);
-      setAIMembers(aiMembersList || []);
+      getAIMembers(chatId).then(list => setAIMembers(list || []));
+    } else {
+      setAIMembers([]);
+    }
+  }, [chatId, isGroup, refreshGroupDetail, getAIMembers, groupUpdateTrigger]);
+
+  // Global message highlight and scrolling
+  useEffect(() => {
+    if (highlightedMessageId && messages.length > 0) {
+      // Find the element and scroll to it
+      setTimeout(() => {
+        const el = document.getElementById(`msg-${highlightedMessageId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('highlight-flash');
+          setTimeout(() => {
+            el.classList.remove('highlight-flash');
+            onClearHighlight?.();
+          }, 2000);
+        }
+      }, 300);
+    }
+  }, [highlightedMessageId, messages, onClearHighlight]);
+
+  // Group Shared Drive fetch functions
+  const fetchDriveItems = useCallback(async (folderId: string | null) => {
+    if (!token || !isGroup) return;
+    setDriveLoading(true);
+    try {
+      const parentId = folderId || 'root';
+      const res = await fetch(`${API_BASE}/api/disk/items?parent_id=${parentId}&group_id=${chatId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setDriveItems(await res.json());
+      }
+    } catch { /* ignore */ }
+    finally { setDriveLoading(false); }
+  }, [token, chatId, isGroup]);
+
+  const fetchDriveBreadcrumbs = useCallback(async (folderId: string | null) => {
+    if (!token || !folderId) {
+      setDriveBreadcrumbs([]);
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/folders/${folderId}/path`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setDriveBreadcrumbs(await res.json());
+      }
+    } catch { /* ignore */ }
+  }, [token]);
+
+  // Fetch drive items reactive
+  useEffect(() => {
+    if (isGroup && showGroupSettings && settingsTab === 'drive') {
+      fetchDriveItems(driveFolderId);
+      fetchDriveBreadcrumbs(driveFolderId);
+    }
+  }, [isGroup, showGroupSettings, settingsTab, driveFolderId, fetchDriveItems, fetchDriveBreadcrumbs]);
+
+  // Group Audit Logs fetch
+  const fetchAuditLogs = useCallback(async () => {
+    if (!token || !isGroup) return;
+    setLogsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${chatId}/logs`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setAuditLogs(await res.json());
+      }
+    } catch { /* ignore */ }
+    finally { setLogsLoading(false); }
+  }, [token, chatId, isGroup]);
+
+  useEffect(() => {
+    if (isGroup && showGroupSettings && settingsTab === 'logs') {
+      fetchAuditLogs();
+    }
+  }, [isGroup, showGroupSettings, settingsTab, fetchAuditLogs]);
+
+  // Drag and drop event handlers for ChatRoom
+  const handleChatDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setChatDragging(true);
+  };
+
+  const handleChatDragLeave = () => {
+    setChatDragging(false);
+  };
+
+  const handleChatDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setChatDragging(false);
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      addToPendingFiles(files);
     }
   };
+
+  // Group Shared Drive Actions
+  const handleCreateDriveFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDriveFolderName.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/folders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: newDriveFolderName.trim(),
+          parent_id: driveFolderId || 'root',
+          group_id: chatId
+        })
+      });
+      if (res.ok) {
+        showToast('新建文件夹成功', 'success');
+        setShowNewDriveFolder(false);
+        setNewDriveFolderName('');
+        fetchDriveItems(driveFolderId);
+      } else {
+        const data = await res.json();
+        showToast(data.error || '新建文件夹失败', 'error');
+      }
+    } catch {
+      showToast('网络错误', 'error');
+    }
+  };
+
+  const handleDriveFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setDriveUploading(true);
+    setDriveUploadProgress(0);
+    try {
+      const credentialRes = await fetch(`${API_BASE}/api/disk/upload-credential`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          parent_id: driveFolderId || 'root',
+          group_id: chatId
+        })
+      });
+
+      if (!credentialRes.ok) {
+        const errData = await credentialRes.json();
+        throw new Error(errData.error || '获取上传凭证失败');
+      }
+
+      const credentialData = await credentialRes.json();
+      const { credentials, bucket, region, cosKey, url } = credentialData;
+
+      const cos = new COS({
+        getAuthorization: (_options, callback) => {
+          callback({
+            TmpSecretId: credentials.tmpSecretId,
+            TmpSecretKey: credentials.tmpSecretKey,
+            SecurityToken: credentials.sessionToken,
+            StartTime: credentialData.startTime,
+            ExpiredTime: credentialData.expiredTime,
+          });
+        },
+      });
+
+      cos.uploadFile({
+        Bucket: bucket,
+        Region: region,
+        Key: cosKey,
+        Body: file,
+        onProgress: (progressData) => {
+          const percent = Math.round((progressData.loaded / progressData.total) * 100);
+          setDriveUploadProgress(percent);
+        }
+      }, async (err) => {
+        if (err) {
+          showToast('上传失败', 'error');
+          setDriveUploading(false);
+          return;
+        }
+
+        try {
+          const completeRes = await fetch(`${API_BASE}/api/disk/upload-complete`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              filename: file.name,
+              size: file.size,
+              parent_id: driveFolderId || 'root',
+              group_id: chatId,
+              cos_key: cosKey,
+              url: url
+            })
+          });
+
+          if (completeRes.ok) {
+            showToast('上传成功', 'success');
+            fetchDriveItems(driveFolderId);
+          } else {
+            const data = await completeRes.json();
+            showToast(data.error || '保存文件元数据失败', 'error');
+          }
+        } catch {
+          showToast('网络错误，保存文件元数据失败', 'error');
+        } finally {
+          setDriveUploading(false);
+        }
+      });
+    } catch (err: any) {
+      showToast(err.message || '上传初始化失败', 'error');
+      setDriveUploading(false);
+    }
+    if (groupDriveFileInputRef.current) groupDriveFileInputRef.current.value = '';
+  };
+
+  const handleDeleteDriveItem = async (itemId: string, itemType: string) => {
+    if (!confirm(`确定要删除此${itemType === 'folder' ? '文件夹' : '文件'}吗？`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/items/${itemId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        showToast('删除成功', 'success');
+        fetchDriveItems(driveFolderId);
+      } else {
+        const data = await res.json();
+        showToast(data.error || '删除失败', 'error');
+      }
+    } catch {
+      showToast('网络错误', 'error');
+    }
+  };
+
+  const handleGroupAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      showToast('正在上传群头像...', 'info');
+      const result = await uploadFileToCOS(file, 'image');
+      if (result && result.url) {
+        const res = await fetch(`${API_BASE}/api/groups/${chatId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ avatar: result.url })
+        });
+        if (res.ok) {
+          showToast('群头像已更新', 'success');
+          refreshGroupDetail();
+          fetchChats();
+        } else {
+          const data = await res.json();
+          showToast(data.error || '群头像更新失败', 'error');
+        }
+      }
+    } catch (err: any) {
+      showToast(`群头像更新失败: ${err.message || ''}`, 'error');
+    }
+    if (groupAvatarInputRef.current) groupAvatarInputRef.current.value = '';
+  };
+
+  const handleEditAIAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAiAvatarUploading(true);
+    try {
+      const result = await uploadFileToCOS(file, 'image');
+      if (result && result.url) {
+        setEditingAIAvatar(result.url);
+        showToast('AI头像上传成功', 'success');
+      }
+    } catch (err: any) {
+      showToast(`AI头像上传失败: ${err.message || ''}`, 'error');
+    } finally {
+      setAiAvatarUploading(false);
+    }
+    if (editingAIAvatarInputRef.current) editingAIAvatarInputRef.current.value = '';
+  };
+
+  const handleSaveEditAI = async () => {
+    if (!editingAIName.trim()) {
+      showToast('请输入AI名字', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/groups/${chatId}/ai-members/${editingAI.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: editingAIName.trim(),
+          personality: editingAIPersonality.trim(),
+          avatar: editingAIAvatar
+        })
+      });
+      if (res.ok) {
+        showToast('修改AI资料成功', 'success');
+        setEditingAI(null);
+        refreshGroupDetail();
+      } else {
+        const data = await res.json();
+        showToast(data.error || '修改AI资料失败', 'error');
+      }
+    } catch {
+      showToast('网络错误', 'error');
+    }
+  };
+
+  // useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   // AI Member Management
   const handleAddAI = async () => {
@@ -1099,7 +1449,20 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
 
   return (
     <ChatMediaContext.Provider value={{ openViewer: openMediaViewer }}>
-    <div style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden', background: 'var(--bg)' }}>
+    <div 
+      style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden', background: 'var(--bg)', position: 'relative' }}
+      onDragOver={handleChatDragOver}
+      onDragLeave={handleChatDragLeave}
+      onDrop={handleChatDrop}
+    >
+      {chatDragging && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(51, 144, 236, 0.12)', border: '2.5px dashed var(--brand-blue)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, pointerEvents: 'none' }}>
+          <div style={{ background: 'var(--bg-card)', padding: '16px 24px', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--brand-blue)', fontWeight: 600 }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            释放文件以发送到聊天
+          </div>
+        </div>
+      )}
       <style>{`
         .cr-main-area {
           display: flex;
@@ -2318,284 +2681,511 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         <div className="cr-settings-overlay">
           <div className="cr-settings-backdrop" onClick={() => setShowGroupSettings(false)} />
           <div className="cr-settings-panel">
-          {/* Settings Header with Back Button */}
-          <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0, gap: 8 }}>
-            <button
-              onClick={() => setShowGroupSettings(false)}
-              title="关闭群设置"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: '4px', display: 'flex', alignItems: 'center', borderRadius: '50%', transition: 'background 0.2s' }}
-              onMouseOver={e => (e.currentTarget.style.background = 'var(--hover)')}
-              onMouseOut={e => (e.currentTarget.style.background = 'none')}
-            >
-              <BackIcon size={20} />
-            </button>
-            <span style={{ fontWeight: 700, fontSize: 15, flex: 1 }}>群设置</span>
-          </div>
-          <div className="cr-settings-section" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
-            <Avatar name={chatName || '群聊'} url={chatAvatar} size={64} fontSize={24} />
-            <div className="cr-settings-group-name" style={{ marginTop: 8, fontWeight: 700, fontSize: 16 }}>
-              {groupDetail.name || '未命名群聊'}
-            </div>
-            {/* Show edit button for owner/admin */}
-            {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
-              <button className="btn btn-secondary" style={{ marginTop: 8, fontSize: 12, padding: '4px 8px', borderRadius: 4 }} onClick={handleRenameGroup}>
-                修改群名
-              </button>
-            )}
-          </div>
-
-          {/* Group Announcement Panel */}
-          <div className="cr-settings-section">
-            <div className="cr-settings-title">群公告</div>
-            {groupDetail.announcement ? (
-              <div style={{ fontSize: '13px', color: 'var(--text)', background: 'var(--hover)', padding: '10px', borderRadius: '6px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {groupDetail.announcement}
-              </div>
-            ) : (
-              <div style={{ fontSize: '12px', color: 'var(--text-dim)', fontStyle: 'italic' }}>暂无公告</div>
-            )}
-            {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
-              <div style={{ display: 'flex', gap: '8px', marginTop: 8 }}>
-                <button
-                  className="btn btn-secondary"
-                  style={{ flex: 1, fontSize: 12, padding: '6px' }}
-                  onClick={() => {
-                    const ann = prompt("请输入新的群公告：", groupDetail.announcement || "");
-                    if (ann !== null) {
-                      updateGroupAnnouncement(chatId, ann.trim()).then(ok => {
-                        if (ok) refreshGroupDetail();
-                      });
-                    }
-                  }}
-                >
-                  修改公告
-                </button>
-                {groupDetail.announcement && (
-                  <button
-                    className="btn btn-danger"
-                    style={{ fontSize: 12, padding: '6px 12px' }}
-                    onClick={() => {
-                      if (confirm("确定要清除群公告吗？")) {
-                        updateGroupAnnouncement(chatId, "").then(ok => {
-                          if (ok) refreshGroupDetail();
-                        });
-                      }
-                    }}
-                  >
-                    删除
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Mute Control Panel */}
-          {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
-            <div className="cr-settings-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>全体禁言</span>
-              <input
-                type="checkbox"
-                checked={!!groupDetail.mute_all}
-                onChange={async (e) => {
-                  const ok = await muteAllGroup(chatId, e.target.checked);
-                  if (ok) refreshGroupDetail();
-                }}
-                style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brand-blue)' }}
-              />
-            </div>
-          )}
-
-          <div className="cr-settings-section">
-            <div className="cr-settings-title">
-              <span>群成员 ({groupDetail.members?.filter((m: any) => !m.is_ai).length || 0})</span>
+            {/* Settings Header with Back Button */}
+            <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0, gap: 8 }}>
               <button
-                className="member-action-btn"
-                title="邀请好友"
-                onClick={() => {
-                  setSelectedInviteFriends([]);
-                  setShowInviteModal(true);
-                }}
-                style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}
+                onClick={() => setShowGroupSettings(false)}
+                title="关闭群设置"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text)', padding: '4px', display: 'flex', alignItems: 'center', borderRadius: '50%', transition: 'background 0.2s' }}
               >
-                <InviteIcon size={15} />
+                <BackIcon size={20} />
+              </button>
+              <span style={{ fontWeight: 700, fontSize: 15, flex: 1 }}>群设置</span>
+            </div>
+
+            {/* Tab navigation */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg-paper)', flexShrink: 0 }}>
+              <button 
+                style={{ flex: 1, padding: '12px', background: 'none', border: 'none', borderBottom: settingsTab === 'main' ? '2.5px solid var(--brand-blue)' : '2.5px solid transparent', color: settingsTab === 'main' ? 'var(--brand-blue)' : 'var(--text-dim)', fontWeight: 600, cursor: 'pointer', fontSize: 13, transition: 'all 0.2s' }}
+                onClick={() => setSettingsTab('main')}
+              >
+                常规设置
+              </button>
+              <button 
+                style={{ flex: 1, padding: '12px', background: 'none', border: 'none', borderBottom: settingsTab === 'drive' ? '2.5px solid var(--brand-blue)' : '2.5px solid transparent', color: settingsTab === 'drive' ? 'var(--brand-blue)' : 'var(--text-dim)', fontWeight: 600, cursor: 'pointer', fontSize: 13, transition: 'all 0.2s' }}
+                onClick={() => { setSettingsTab('drive'); setDriveFolderId(null); }}
+              >
+                共享云盘
+              </button>
+              <button 
+                style={{ flex: 1, padding: '12px', background: 'none', border: 'none', borderBottom: settingsTab === 'logs' ? '2.5px solid var(--brand-blue)' : '2.5px solid transparent', color: settingsTab === 'logs' ? 'var(--brand-blue)' : 'var(--text-dim)', fontWeight: 600, cursor: 'pointer', fontSize: 13, transition: 'all 0.2s' }}
+                onClick={() => setSettingsTab('logs')}
+              >
+                审计日志
               </button>
             </div>
-            <div className="cr-settings-member-list">
-              {groupDetail.members?.filter((member: any) => !member.is_ai).map((member: any) => {
-                const isOwner = member.id === groupDetail.owner_id;
-                const isAdmin = groupDetail.admins?.includes(member.id);
-                const isMe = member.id === currentUserId;
-                const canKick = (groupDetail.owner_id === currentUserId && !isOwner) || (groupDetail.admins?.includes(currentUserId) && !isOwner && !isAdmin);
-                const canSetAdmin = groupDetail.owner_id === currentUserId && !isOwner;
-                
-                const isMuted = groupDetail.muted_members && !!groupDetail.muted_members[member.id];
-                const canMute = !isOwner && !isMe && (
-                  groupDetail.owner_id === currentUserId ||
-                  (groupDetail.admins?.includes(currentUserId) && !isAdmin)
-                );
 
-                const hasActions = canMute || canSetAdmin || (canKick && !isMe);
-                const isMenuOpen = activeMemberMenuId === member.id;
-
-                return (
-                  <div key={member.id} className="cr-settings-member-item" style={{ position: 'relative' }}>
-                    <div className="member-info">
-                      <Avatar name={member.nickname} url={member.avatar} size={28} />
-                      <span className="member-name">{member.nickname}</span>
-                      {isOwner && <span className="member-badge badge-owner">群主</span>}
-                      {isAdmin && <span className="member-badge badge-admin">管理员</span>}
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              {settingsTab === 'main' && (
+                <>
+                  <div className="cr-settings-section" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', borderBottom: '1px solid var(--border)', gap: 10 }}>
+                    <div 
+                      onClick={() => {
+                        if (groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) {
+                          groupAvatarInputRef.current?.click();
+                        }
+                      }}
+                      style={{
+                        position: 'relative',
+                        cursor: (groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) ? 'pointer' : 'default',
+                        borderRadius: '50%',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      <Avatar name={groupDetail?.name || chatName || '群聊'} url={groupDetail?.avatar || chatAvatar} size={68} fontSize={24} />
+                      {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+                        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.2s', color: '#fff' }} onMouseEnter={e => e.currentTarget.style.opacity = '1'} onMouseLeave={e => e.currentTarget.style.opacity = '0'}>
+                          <Edit3 size={16} />
+                        </div>
+                      )}
                     </div>
-                    {hasActions && (
-                      <button
-                        className="member-menu-btn"
-                        title="更多操作"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isMenuOpen) {
-                            setActiveMemberMenuId(null);
-                            setPopoverPos(null);
-                          } else {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            setActiveMemberMenuId(member.id);
-                            const pos = calculatePopoverPosition({
-                              triggerRect: rect,
-                              popupSize: { width: 180, height: 120 }
-                            });
-                            setPopoverPos(pos);
-                          }
-                        }}
-                      >
-                        <HorizontalDotsIcon size={16} />
+                    <input type="file" ref={groupAvatarInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleGroupAvatarChange} />
+                    
+                    <div className="cr-settings-group-name" style={{ fontWeight: 700, fontSize: 16 }}>
+                      {groupDetail.name || '未命名群聊'}
+                    </div>
+                    {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', borderRadius: 4 }} onClick={handleRenameGroup}>
+                        修改群名
                       </button>
                     )}
-                    {isMenuOpen && hasActions && (
-                      <div className="member-popover" style={popoverPos ? { top: popoverPos.top, left: popoverPos.left } : undefined} onClick={(e) => e.stopPropagation()}>
-                        {canMute && (
-                          <div className="member-popover-item">
-                            <span>禁言</span>
-                            <label className="toggle-switch">
-                              <input
-                                type="checkbox"
-                                checked={isMuted}
-                                onChange={() => {
-                                  handleToggleMute(member.id, isMuted);
-                                  setActiveMemberMenuId(null);
-                                }}
-                              />
-                              <span className="toggle-slider" />
-                            </label>
-                          </div>
-                        )}
-                        {canMute && (canSetAdmin || (canKick && !isMe)) && <div className="member-popover-divider" />}
-                        {canSetAdmin && (
+                  </div>
+
+                  {/* Group Announcement Panel */}
+                  <div className="cr-settings-section">
+                    <div className="cr-settings-title">群公告</div>
+                    {groupDetail.announcement ? (
+                      <div style={{ fontSize: '13px', color: 'var(--text)', background: 'var(--hover)', padding: '10px', borderRadius: '6px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                        {groupDetail.announcement}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '12px', color: 'var(--text-dim)', fontStyle: 'italic' }}>暂无公告</div>
+                    )}
+                    {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+                      <div style={{ display: 'flex', gap: '8px', marginTop: 8 }}>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ flex: 1, fontSize: 12, padding: '6px' }}
+                          onClick={() => {
+                            const ann = prompt("请输入新的群公告：", groupDetail.announcement || "");
+                            if (ann !== null) {
+                              updateGroupAnnouncement(chatId, ann.trim()).then(ok => {
+                                if (ok) refreshGroupDetail();
+                              });
+                            }
+                          }}
+                        >
+                          修改公告
+                        </button>
+                        {groupDetail.announcement && (
                           <button
-                            className="member-popover-item"
+                            className="btn btn-danger"
+                            style={{ fontSize: 12, padding: '6px 12px' }}
                             onClick={() => {
-                              handleToggleAdmin(member.id, isAdmin);
-                              setActiveMemberMenuId(null);
+                              if (confirm("确定要清除群公告吗？")) {
+                                updateGroupAnnouncement(chatId, "").then(ok => {
+                                  if (ok) refreshGroupDetail();
+                                });
+                              }
                             }}
                           >
-                            <span>{isAdmin ? '取消管理员' : '设为管理员'}</span>
-                            <AdminIcon size={15} />
-                          </button>
-                        )}
-                        {canSetAdmin && (canKick && !isMe) && <div className="member-popover-divider" />}
-                        {canKick && !isMe && (
-                          <button
-                            className="member-popover-item danger"
-                            onClick={() => {
-                              handleKickMember(member.id, member.nickname);
-                              setActiveMemberMenuId(null);
-                            }}
-                          >
-                            <span>移出群聊</span>
-                            <KickIcon size={14} />
+                            删除
                           </button>
                         )}
                       </div>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          </div>
 
-          {/* AI Members Section */}
-          <div className="cr-settings-section">
-            <div className="cr-settings-title">
-              <span>AI成员 ({aiMembers.length || 0})</span>
-              <button
-                className="member-action-btn"
-                title="添加AI成员"
-                onClick={() => {
-                  setAIName('');
-                  setAIPersonality('');
-                  setShowAddAIModal(true);
-                }}
-                style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}
-              >
-                <InviteIcon size={15} />
-              </button>
-            </div>
-            <div className="cr-settings-member-list">
-              {aiMembers.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-dim)', fontSize: '12px' }}>
-                  暂无AI成员
-                </div>
-              ) : (
-                aiMembers.map(ai => (
-                  <div key={ai.id} className="cr-settings-member-item">
-                    <div className="member-info">
-                      <span style={{ display: 'flex', alignItems: 'center', color: 'var(--brand-blue)', flexShrink: 0 }}>
-                        <BotIcon size={22} />
-                      </span>
-                      <span className="member-name">{ai.name}</span>
-                      {ai.personality && (
-                        <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginLeft: '4px' }}>
-                          ({ai.personality})
-                        </span>
-                      )}
+                  {/* Mute Control Panel */}
+                  {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+                    <div className="cr-settings-section" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>全体禁言</span>
+                      <input
+                        type="checkbox"
+                        checked={!!groupDetail.mute_all}
+                        onChange={async (e) => {
+                          const ok = await muteAllGroup(chatId, e.target.checked);
+                          if (ok) refreshGroupDetail();
+                        }}
+                        style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: 'var(--brand-blue)' }}
+                      />
                     </div>
-                    <div className="cr-settings-member-actions">
+                  )}
+
+                  <div className="cr-settings-section">
+                    <div className="cr-settings-title">
+                      <span>群成员 ({groupDetail.members?.filter((m: any) => !m.is_ai).length || 0})</span>
                       <button
-                        className="member-action-btn danger"
-                        title="移除AI"
-                        onClick={() => handleRemoveAI(ai.id)}
-                        style={{ display: 'flex', alignItems: 'center' }}
+                        className="member-action-btn"
+                        title="邀请好友"
+                        onClick={() => {
+                          setSelectedInviteFriends([]);
+                          setShowInviteModal(true);
+                        }}
+                        style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}
                       >
-                        <KickIcon size={14} />
+                        <InviteIcon size={15} />
                       </button>
                     </div>
+                    <div className="cr-settings-member-list">
+                      {groupDetail.members?.filter((member: any) => !member.is_ai).map((member: any) => {
+                        const isOwner = member.id === groupDetail.owner_id;
+                        const isAdmin = groupDetail.admins?.includes(member.id);
+                        const isMe = member.id === currentUserId;
+                        const canKick = (groupDetail.owner_id === currentUserId && !isOwner) || (groupDetail.admins?.includes(currentUserId) && !isOwner && !isAdmin);
+                        const canSetAdmin = groupDetail.owner_id === currentUserId && !isOwner;
+                        
+                        const isMuted = groupDetail.muted_members && !!groupDetail.muted_members[member.id];
+                        const canMute = !isOwner && !isMe && (
+                          groupDetail.owner_id === currentUserId ||
+                          (groupDetail.admins?.includes(currentUserId) && !isAdmin)
+                        );
+
+                        const hasActions = canMute || canSetAdmin || (canKick && !isMe);
+                        const isMenuOpen = activeMemberMenuId === member.id;
+
+                        return (
+                          <div key={member.id} className="cr-settings-member-item" style={{ position: 'relative' }}>
+                            <div className="member-info">
+                              <Avatar name={member.nickname} url={member.avatar} size={28} />
+                              <span className="member-name">{member.nickname}</span>
+                              {isOwner && <span className="member-badge badge-owner">群主</span>}
+                              {isAdmin && <span className="member-badge badge-admin">管理员</span>}
+                            </div>
+                            {hasActions && (
+                              <button
+                                className="member-menu-btn"
+                                title="更多操作"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (isMenuOpen) {
+                                    setActiveMemberMenuId(null);
+                                    setPopoverPos(null);
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setActiveMemberMenuId(member.id);
+                                    const pos = calculatePopoverPosition({
+                                      triggerRect: rect,
+                                      popupSize: { width: 180, height: 120 }
+                                    });
+                                    setPopoverPos(pos);
+                                  }
+                                }}
+                              >
+                                <HorizontalDotsIcon size={16} />
+                              </button>
+                            )}
+                            {isMenuOpen && hasActions && (
+                              <div className="member-popover" style={popoverPos ? { top: popoverPos.top, left: popoverPos.left } : undefined} onClick={(e) => e.stopPropagation()}>
+                                {canMute && (
+                                  <div className="member-popover-item">
+                                    <span>禁言</span>
+                                    <label className="toggle-switch">
+                                      <input
+                                        type="checkbox"
+                                        checked={isMuted}
+                                        onChange={() => {
+                                          handleToggleMute(member.id, isMuted);
+                                          setActiveMemberMenuId(null);
+                                        }}
+                                      />
+                                      <span className="toggle-slider" />
+                                    </label>
+                                  </div>
+                                )}
+                                {canMute && (canSetAdmin || (canKick && !isMe)) && <div className="member-popover-divider" />}
+                                {canSetAdmin && (
+                                  <button
+                                    className="member-popover-item"
+                                    onClick={() => {
+                                      handleToggleAdmin(member.id, isAdmin);
+                                      setActiveMemberMenuId(null);
+                                    }}
+                                  >
+                                    <span>{isAdmin ? '取消管理员' : '设为管理员'}</span>
+                                    <AdminIcon size={15} />
+                                  </button>
+                                )}
+                                {canSetAdmin && (canKick && !isMe) && <div className="member-popover-divider" />}
+                                {canKick && !isMe && (
+                                  <button
+                                    className="member-popover-item danger"
+                                    onClick={() => {
+                                      handleKickMember(member.id, member.nickname);
+                                      setActiveMemberMenuId(null);
+                                    }}
+                                  >
+                                    <span>移出群聊</span>
+                                    <KickIcon size={14} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                ))
+
+                  {/* AI Members Section */}
+                  <div className="cr-settings-section">
+                    <div className="cr-settings-title">
+                      <span>AI成员 ({aiMembers.length || 0})</span>
+                      <button
+                        className="member-action-btn"
+                        title="添加AI成员"
+                        onClick={() => {
+                          setAIName('');
+                          setAIPersonality('');
+                          setShowAddAIModal(true);
+                        }}
+                        style={{ color: 'var(--brand-blue)', display: 'flex', alignItems: 'center' }}
+                      >
+                        <InviteIcon size={15} />
+                      </button>
+                    </div>
+                    <div className="cr-settings-member-list">
+                      {aiMembers.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-dim)', fontSize: '12px' }}>
+                          暂无AI成员
+                        </div>
+                      ) : (
+                        aiMembers.map(ai => (
+                          <div key={ai.id} className="cr-settings-member-item">
+                            <div className="member-info">
+                              <Avatar name={ai.name} url={ai.avatar} size={28} />
+                              <span className="member-name">{ai.name}</span>
+                              {ai.personality && (
+                                <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginLeft: '4px' }}>
+                                  ({ai.personality})
+                                </span>
+                              )}
+                            </div>
+                            <div className="cr-settings-member-actions" style={{ display: 'flex', gap: '8px' }}>
+                              {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+                                <button
+                                  className="member-action-btn"
+                                  title="编辑AI"
+                                  onClick={() => {
+                                    setEditingAI(ai);
+                                    setEditingAIName(ai.name);
+                                    setEditingAIPersonality(ai.personality || '');
+                                    setEditingAIAvatar(ai.avatar || '');
+                                  }}
+                                  style={{ display: 'flex', alignItems: 'center', color: 'var(--brand-blue)' }}
+                                >
+                                  <Edit3 size={14} />
+                                </button>
+                              )}
+                              {(groupDetail.owner_id === currentUserId || groupDetail.admins?.includes(currentUserId)) && (
+                                <button
+                                  className="member-action-btn danger"
+                                  title="移除AI"
+                                  onClick={() => handleRemoveAI(ai.id)}
+                                  style={{ display: 'flex', alignItems: 'center' }}
+                                >
+                                  <KickIcon size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="cr-settings-section" style={{ marginTop: 'auto', borderBottom: 'none', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {groupDetail.owner_id === currentUserId ? (
+                      <button
+                        className="btn btn-danger"
+                        style={{ width: '100%', borderRadius: 8, padding: '10px' }}
+                        onClick={async () => {
+                          if (confirm("确定要解散该群聊吗？此操作不可撤销！")) {
+                            const ok = await dissolveGroup(chatId);
+                            if (ok) onBack?.();
+                          }
+                        }}
+                      >
+                        解散群聊
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-danger"
+                        style={{ width: '100%', borderRadius: 8, padding: '10px' }}
+                        onClick={handleLeaveGroup}
+                      >
+                        退出群聊
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {settingsTab === 'drive' && (
+                <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Breadcrumbs Navigation */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontSize: '13px' }}>
+                    <span 
+                      style={{ cursor: 'pointer', color: 'var(--brand-blue)', fontWeight: 600 }}
+                      onClick={() => setDriveFolderId(null)}
+                    >
+                      根目录
+                    </span>
+                    {driveBreadcrumbs.map((crumb, idx) => (
+                      <React.Fragment key={crumb.id}>
+                        <span style={{ color: 'var(--text-dim)' }}>/</span>
+                        <span 
+                          style={{ cursor: 'pointer', color: idx === driveBreadcrumbs.length - 1 ? 'var(--text)' : 'var(--brand-blue)' }}
+                          onClick={() => setDriveFolderId(crumb.id)}
+                        >
+                          {crumb.name}
+                        </span>
+                      </React.Fragment>
+                    ))}
+                    {driveFolderId && (
+                      <button 
+                        style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', padding: '4px 8px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}
+                        onClick={() => {
+                          if (driveBreadcrumbs.length <= 1) {
+                            setDriveFolderId(null);
+                          } else {
+                            setDriveFolderId(driveBreadcrumbs[driveBreadcrumbs.length - 2].id);
+                          }
+                        }}
+                      >
+                        <ArrowLeft size={12} /> 返回上一级
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Operation Bar */}
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button 
+                      className="btn btn-primary" 
+                      style={{ flex: 1, padding: '8px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      onClick={() => groupDriveFileInputRef.current?.click()}
+                      disabled={driveUploading}
+                    >
+                      <Upload size={14} /> 上传文件
+                    </button>
+                    <button 
+                      className="btn btn-secondary" 
+                      style={{ flex: 1, padding: '8px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      onClick={() => setShowNewDriveFolder(v => !v)}
+                    >
+                      <Plus size={14} /> 新建文件夹
+                    </button>
+                    <input type="file" ref={groupDriveFileInputRef} style={{ display: 'none' }} onChange={handleDriveFileUpload} />
+                  </div>
+
+                  {showNewDriveFolder && (
+                    <form onSubmit={handleCreateDriveFolder} style={{ display: 'flex', gap: '8px' }}>
+                      <input 
+                        placeholder="文件夹名称"
+                        value={newDriveFolderName}
+                        onChange={e => setNewDriveFolderName(e.target.value)}
+                        style={{ flex: 1, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--bg)', color: 'var(--text)', fontSize: '13px' }}
+                      />
+                      <button type="submit" className="btn btn-primary" style={{ padding: '8px 14px', fontSize: '12px' }}>创建</button>
+                    </form>
+                  )}
+
+                  {driveUploading && (
+                    <div style={{ background: 'var(--hover)', padding: '10px 14px', borderRadius: '8px', fontSize: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <span>文件上传中...</span>
+                        <span>{driveUploadProgress}%</span>
+                      </div>
+                      <div style={{ height: '4px', background: 'var(--border)', borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${driveUploadProgress}%`, height: '100%', background: 'var(--brand-blue)' }} />
+                      </div>
+                    </div>
+                  )}
+
+                  {driveLoading ? (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>加载中...</div>
+                  ) : driveItems.length === 0 ? (
+                    <div style={{ padding: '36px 12px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px', border: '1px dashed var(--border)', borderRadius: '8px' }}>
+                      暂无共享文件，点击上方按钮上传或新建。
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      {driveItems.map((item: any) => {
+                        const isFolder = item.type === 'folder';
+                        return (
+                          <div 
+                            key={item.id} 
+                            style={{ display: 'flex', alignItems: 'center', padding: '10px 12px', borderRadius: '8px', borderBottom: '1px solid var(--border-light)', background: 'var(--bg-card)', gap: '10px', cursor: isFolder ? 'pointer' : 'default' }}
+                            onClick={() => { if (isFolder) setDriveFolderId(item.id); }}
+                          >
+                            {isFolder ? <Folder size={20} style={{ color: 'var(--brand-yellow)' }} /> : <File size={20} style={{ color: 'var(--brand-blue)' }} />}
+                            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {item.name}
+                              </span>
+                              {!isFolder && (
+                                <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
+                                  {Math.round(item.size / 1024 * 10) / 10} KB • {new Date(item.created_at).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px' }} onClick={e => e.stopPropagation()}>
+                              {!isFolder && (
+                                <a 
+                                  href={item.url} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  style={{ color: 'var(--brand-blue)', fontSize: '11px', textDecoration: 'none', padding: '4px 8px', border: '1px solid var(--border)', borderRadius: '4px', background: 'var(--bg-paper)' }}
+                                >
+                                  下载
+                                </a>
+                              )}
+                              <button 
+                                onClick={() => handleDeleteDriveItem(item.id, item.type)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--badge-unread)', padding: '4px' }}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {settingsTab === 'logs' && (
+                <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {logsLoading ? (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px' }}>加载中...</div>
+                  ) : auditLogs.length === 0 ? (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' }}>暂无审计日志</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', borderLeft: '2px solid var(--border)', paddingLeft: '14px', marginLeft: '6px' }}>
+                      {auditLogs.map((log: any) => (
+                        <div key={log.id} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {/* Dot indicator */}
+                          <div style={{ position: 'absolute', width: '8px', height: '8px', background: 'var(--brand-blue)', borderRadius: '50%', left: '-19px', top: '4px' }} />
+                          
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>
+                              {log.operator_nickname || '系统'}
+                            </span>
+                            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
+                              {new Date(log.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--text)' }}>
+                            {log.action_text || log.details}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
-          </div>
-
-          <div className="cr-settings-section" style={{ marginTop: 'auto', borderBottom: 'none', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {groupDetail.owner_id === currentUserId ? (
-              <button
-                className="btn btn-danger"
-                style={{ width: '100%', borderRadius: 8, padding: '10px' }}
-                onClick={async () => {
-                  if (confirm("确定要解散该群聊吗？此操作不可撤销！")) {
-                    const ok = await dissolveGroup(chatId);
-                    if (ok) onBack?.();
-                  }
-                }}
-              >
-                解散群聊
-              </button>
-            ) : (
-              <button
-                className="btn btn-danger"
-                style={{ width: '100%', borderRadius: 8, padding: '10px' }}
-                onClick={handleLeaveGroup}
-              >
-                退出群聊
-              </button>
-            )}
-          </div>
           </div>
         </div>
       )}
@@ -2797,6 +3387,69 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               </button>
               <button type="button" className="btn btn-primary" onClick={handleAddAI} disabled={!aiName.trim()}>
                 确定
+            </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Edit AI Member Modal */}
+      {editingAI && (
+        <div className="modal-overlay" onClick={() => setEditingAI(null)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <span className="modal-title">编辑 AI 成员资料</span>
+              <button className="modal-close-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setEditingAI(null)}><CloseIcon size={20} /></button>
+            </div>
+            <div className="modal-body">
+              {/* AI Avatar Selector */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '16px', gap: '8px' }}>
+                <div 
+                  onClick={() => editingAIAvatarInputRef.current?.click()}
+                  style={{ position: 'relative', cursor: 'pointer', borderRadius: '50%', overflow: 'hidden', width: '64px', height: '64px', border: '1px solid var(--border)' }}
+                >
+                  <Avatar name={editingAIName || '?'} url={editingAIAvatar} size={64} fontSize={24} />
+                  <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.2s', color: '#fff' }} onMouseEnter={e => e.currentTarget.style.opacity = '1'} onMouseLeave={e => e.currentTarget.style.opacity = '0'}>
+                    <Edit3 size={16} />
+                  </div>
+                  {aiAvatarUploading && (
+                    <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '11px' }}>上传中</div>
+                  )}
+                </div>
+                <input type="file" ref={editingAIAvatarInputRef} style={{ display: 'none' }} accept="image/*" onChange={handleEditAIAvatarChange} />
+                <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>点击更换头像</span>
+              </div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>
+                  AI名字 <span style={{ color: 'var(--badge-unread)' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="输入AI名字"
+                  value={editingAIName}
+                  onChange={e => setEditingAIName(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', fontWeight: 500, color: 'var(--text)' }}>
+                  性格描述
+                </label>
+                <input
+                  type="text"
+                  placeholder="例如：活泼开朗、幽默风趣"
+                  value={editingAIPersonality}
+                  onChange={e => setEditingAIPersonality(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setEditingAI(null)}>
+                取消
+              </button>
+              <button type="button" className="btn btn-primary" onClick={handleSaveEditAI} disabled={!editingAIName.trim() || aiAvatarUploading}>
+                保存
               </button>
             </div>
           </div>

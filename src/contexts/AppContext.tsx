@@ -9,6 +9,13 @@ export interface User {
   nickname: string;
   avatar?: string;
   custom_transfer_path?: string;
+  bio?: string;
+  gender?: string;
+  birthday?: string;
+  country?: string;
+  city?: string;
+  website?: string;
+  job?: string;
 }
 
 export interface Message {
@@ -81,6 +88,7 @@ interface AppCtx {
   deleteFriend: (friendId: string) => Promise<void>;
   updateNickname: (newNickname: string) => Promise<boolean>;
   updateCustomTransferPath: (path: string) => Promise<boolean>;
+  updateProfile: (profileData: Partial<User>) => Promise<boolean>;
   uploadAvatar: (file: File) => Promise<string | null>;
   startChat: (friendId: string, friendName: string, isGroup?: boolean) => void;
   fetchChats: () => Promise<void>;
@@ -434,16 +442,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch { showToast('网络错误', 'error'); }
   }, [token, user, getHeaders, fetchFriends, fetchChats, showToast, hideChat]);
 
-  const updateNickname = useCallback(async (newNickname: string): Promise<boolean> => {
+  const updateProfile = useCallback(async (profileData: Partial<User>): Promise<boolean> => {
     if (!token || !user) return false;
     try {
       const res = await fetch(`${API_BASE}/api/user/profile`, {
         method: 'PUT',
         headers: getHeaders,
-        body: JSON.stringify({ nickname: newNickname, custom_transfer_path: user.custom_transfer_path || '' }),
+        body: JSON.stringify({
+          nickname: profileData.nickname ?? user.nickname,
+          custom_transfer_path: profileData.custom_transfer_path ?? user.custom_transfer_path ?? '',
+          bio: profileData.bio ?? user.bio ?? '',
+          gender: profileData.gender ?? user.gender ?? '',
+          birthday: profileData.birthday ?? user.birthday ?? '',
+          country: profileData.country ?? user.country ?? '',
+          city: profileData.city ?? user.city ?? '',
+          website: profileData.website ?? user.website ?? '',
+          job: profileData.job ?? user.job ?? '',
+        }),
       });
-      if (!res.ok) { showToast((await res.json()).error || '修改失败', 'error'); return false; }
-      const u = { ...user, nickname: newNickname };
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error || '修改失败', 'error'); return false; }
+      const u = { ...user, ...profileData };
       setUser(u);
       localStorage.setItem('user', JSON.stringify(u));
       fetchChats();
@@ -451,21 +470,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch { showToast('网络错误', 'error'); return false; }
   }, [token, user, getHeaders, fetchChats, showToast]);
 
+  const updateNickname = useCallback(async (newNickname: string): Promise<boolean> => {
+    return updateProfile({ nickname: newNickname });
+  }, [updateProfile]);
+
   const updateCustomTransferPath = useCallback(async (path: string): Promise<boolean> => {
-    if (!token || !user) return false;
-    try {
-      const res = await fetch(`${API_BASE}/api/user/profile`, {
-        method: 'PUT',
-        headers: getHeaders,
-        body: JSON.stringify({ nickname: user.nickname, custom_transfer_path: path.trim() }),
-      });
-      if (!res.ok) { showToast((await res.json()).error || '修改失败', 'error'); return false; }
-      const u = { ...user, custom_transfer_path: path.trim() };
-      setUser(u);
-      localStorage.setItem('user', JSON.stringify(u));
-      return true;
-    } catch { showToast('网络错误', 'error'); return false; }
-  }, [token, user, getHeaders, showToast]);
+    return updateProfile({ custom_transfer_path: path.trim() });
+  }, [updateProfile]);
 
   const uploadAvatar = useCallback(async (file: File): Promise<string | null> => {
     if (!token || !user) return null;
@@ -1279,7 +1290,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       token, user, chats, friends, friendRequests, messages,
       activeChatFriendId, setActiveChatFriendId, groupUpdateTrigger,
       login, logout, sendMessage, sendQuoteMessage, recallMessage, editMessage, loadChatMessages,
-      addFriend, handleFriendRequest, deleteFriend, updateNickname, updateCustomTransferPath, startChat,
+      addFriend, handleFriendRequest, deleteFriend, updateNickname, updateCustomTransferPath, updateProfile, startChat,
       fetchChats, fetchFriends, fetchFriendRequests,
       hiddenChats, remarks, pinnedChats, hideChat, updateRemark, togglePinChat,
       uploadAvatar,
