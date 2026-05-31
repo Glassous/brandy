@@ -214,3 +214,10 @@ type Game struct {
 	UpdatedAt          time.Time            `bson:"updated_at" json:"updated_at"`
 }
 
+type Sticker struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	UserID    primitive.ObjectID `bson:"user_id" json:"user_id"`
+	URL       string             `bson:"url" json:"url"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}
+

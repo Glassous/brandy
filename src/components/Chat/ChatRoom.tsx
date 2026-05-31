@@ -14,8 +14,10 @@ import MediaPreviewModal from './MediaPreviewModal';
 import { ChatMediaContext, type MediaItem } from './ChatMediaContext';
 import { Folder, File, Trash2, Upload, Plus, Edit3, ArrowLeft } from 'lucide-react';
 import GameRoomModal from './GameRoomModal';
+import EmojiPicker, { Theme } from 'emoji-picker-react';
 
 interface ChatRoomProps {
+
   currentUserId: string;
   chatId: string;
   isGroup?: boolean;
@@ -566,6 +568,112 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [sendMode, setSendMode] = useState<'independent' | 'combined'>('independent');
 
+  // Sticker States & Actions
+  const [stickers, setStickers] = useState<{ id: string; url: string }[]>([]);
+  const [showStickerPanel, setShowStickerPanel] = useState(false);
+  const [stickerPanelTab, setStickerPanelTab] = useState<'emoji' | 'sticker'>('emoji');
+  const [uploadingSticker, setUploadingSticker] = useState(false);
+  const stickerInputRef = useRef<HTMLInputElement>(null);
+
+  const fetchStickers = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/stickers`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setStickers(await res.json());
+      }
+    } catch { /* ignore */ }
+  }, [token]);
+
+  useEffect(() => {
+    if (token) {
+      fetchStickers();
+    }
+  }, [token, fetchStickers]);
+
+  const handleEmojiClick = (emoji: string) => {
+    setText(prev => prev + emoji);
+  };
+
+  const handleAddStickerFromLocal = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingSticker(true);
+    try {
+      showToast('正在上传表情...', 'info');
+      const result = await uploadFileToCOS(file, 'image');
+      if (result && result.url) {
+        const res = await fetch(`${API_BASE}/api/stickers`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ url: result.url })
+        });
+        if (res.ok) {
+          showToast('已添加到表情包', 'success');
+          fetchStickers();
+        } else {
+          showToast('添加表情包失败', 'error');
+        }
+      }
+    } catch (err: any) {
+      showToast(`上传失败: ${err.message || ''}`, 'error');
+    } finally {
+      setUploadingSticker(false);
+      if (stickerInputRef.current) stickerInputRef.current.value = '';
+    }
+  };
+
+  const handleDeleteSticker = async (stickerId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('确定要删除这个表情吗？')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/stickers/${stickerId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        showToast('删除表情成功', 'success');
+        fetchStickers();
+      } else {
+        showToast('删除表情失败', 'error');
+      }
+    } catch {
+      showToast('网络错误', 'error');
+    }
+  };
+
+  const handleSendSticker = (url: string) => {
+    onSend(chatId, JSON.stringify({ type: 'sticker', url }));
+    setShowStickerPanel(false);
+  };
+
+  const handleAddMessageImageToStickers = async (imageUrl: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/stickers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ url: imageUrl })
+      });
+      if (res.ok) {
+        showToast('已添加到表情包', 'success');
+        fetchStickers();
+      } else {
+        showToast('添加表情包失败', 'error');
+      }
+    } catch {
+      showToast('网络错误，添加失败', 'error');
+    }
+  };
+
+
   // Mention List State
   const [showMentionList, setShowMentionList] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -1082,6 +1190,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
       setActiveMemberMenuId(null);
       setPopoverPos(null);
       setShowUploadMenu(false);
+      setShowStickerPanel(false);
     };
     window.addEventListener('click', handleCloseMenu);
     return () => window.removeEventListener('click', handleCloseMenu);
@@ -1757,7 +1866,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         .cr-input-bar input {
           flex: 1;
           border-radius: 24px;
-          border: 1px solid var(--border);
+          border: 1.5px solid var(--text-dim);
           background: var(--bg);
           padding: 11px 18px;
           font-size: 14px;
@@ -2149,6 +2258,136 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
         .toggle-switch input:checked + .toggle-slider::before {
           transform: translateX(16px);
         }
+
+        /* Sticker Panel Styles */
+        .cr-sticker-panel {
+          position: absolute;
+          bottom: 100%;
+          right: 48px;
+          margin-bottom: 8px;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+          z-index: 300;
+          width: min(480px, 90vw);
+          height: 480px;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          animation: popoverFadeIn 0.15s ease-out;
+        }
+        .cr-sticker-tabs {
+          display: flex;
+          border-bottom: 1px solid var(--border);
+          background: var(--bg-paper);
+          flex-shrink: 0;
+        }
+        .cr-sticker-tab-btn {
+          flex: 1;
+          padding: 10px;
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: var(--text-dim);
+          font-weight: 600;
+          cursor: pointer;
+          font-size: 13px;
+          transition: all 0.2s;
+        }
+        .cr-sticker-tab-btn.active {
+          color: var(--brand-blue);
+          border-bottom-color: var(--brand-blue);
+        }
+        .cr-sticker-content {
+          flex: 1;
+          overflow-y: auto;
+          padding: 12px;
+        }
+        .cr-emoji-grid {
+          display: grid;
+          grid-template-columns: repeat(8, 1fr);
+          gap: 6px;
+        }
+        .cr-emoji-item {
+          font-size: 20px;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 6px;
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.15s;
+        }
+        .cr-emoji-item:hover {
+          background: var(--hover);
+        }
+        .cr-sticker-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 8px;
+        }
+        .cr-sticker-item {
+          aspect-ratio: 1;
+          border-radius: 8px;
+          overflow: hidden;
+          border: 1px solid var(--border-light);
+          cursor: pointer;
+          position: relative;
+          background: var(--bg);
+          transition: transform 0.15s;
+        }
+        .cr-sticker-item:hover {
+          transform: scale(1.05);
+        }
+        .cr-sticker-img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+        .cr-sticker-delete-btn {
+          position: absolute;
+          top: 2px;
+          right: 2px;
+          background: rgba(0,0,0,0.6);
+          color: #fff;
+          border: none;
+          border-radius: 50%;
+          width: 16px;
+          height: 16px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          cursor: pointer;
+        }
+        .cr-sticker-add-btn {
+          aspect-ratio: 1;
+          border-radius: 8px;
+          border: 2px dashed var(--border);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          color: var(--text-dim);
+          transition: all 0.2s;
+        }
+        .cr-sticker-add-btn:hover {
+          border-color: var(--brand-blue);
+          color: var(--brand-blue);
+        }
+        
+        /* Fix emoji-picker-react search icon overlap caused by global input styles */
+        .cr-sticker-panel input.epr-search,
+        .cr-sticker-panel .epr-search-container input,
+        .cr-sticker-panel input[placeholder*="搜索"],
+        .cr-sticker-panel .EmojiPickerReact input {
+          padding-left: 55px !important;
+          padding-right: 30px !important;
+        }
       `}</style>
 
       {/* Main Chat Area */}
@@ -2420,6 +2659,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                           let chatFileData = null;
                           let chatBundleData = null;
                           let gameCardData = null;
+                          let stickerData = null;
                           if (m.content.startsWith('{')) {
                             try {
                               const parsed = JSON.parse(m.content);
@@ -2432,12 +2672,14 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                                   chatBundleData = parsed;
                                 } else if (parsed.type === 'game_card') {
                                   gameCardData = parsed;
+                                } else if (parsed.type === 'sticker') {
+                                  stickerData = parsed;
                                 }
                               }
                             } catch { /* ignore */ }
                           }
 
-                          const isMedia = (chatFileData && (chatFileData.file_type === 'image' || chatFileData.file_type === 'video'));
+                          const isMedia = (chatFileData && (chatFileData.file_type === 'image' || chatFileData.file_type === 'video')) || stickerData;
                           const bubbleStyle = isMedia ? {
                             cursor: isMultiSelect ? 'pointer' : 'default',
                             maxWidth: '100%',
@@ -2487,6 +2729,12 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                               {chatFileData && <ChatFileCard data={chatFileData} />}
                               {chatBundleData && <ChatBundleCard data={chatBundleData} />}
                               {gameCardData && <GameCard data={gameCardData} isOwn={m.sender_id === user?.id} onOpenGame={(gid) => setActiveGameId(gid)} />}
+                              {stickerData && (
+                                <div style={{ position: 'relative', overflow: 'hidden', borderRadius: '8px', cursor: 'pointer' }} onClick={() => openMediaViewer(stickerData.url)}>
+                                  <img src={stickerData.url} alt="表情" style={{ maxWidth: '120px', maxHeight: '120px', objectFit: 'contain', display: 'block', borderRadius: '4px' }} />
+                                </div>
+                              )}
+
                               {!fileShareData && !chatFileData && !chatBundleData && !gameCardData && (
                                 <span className="msg-text">
                                   {m.content}
@@ -2797,7 +3045,7 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               />
               <input
                 type="text"
-                placeholder={isUserMuted() ? (groupDetail?.mute_all ? "全体禁言中" : "您已被禁言") : "输入消息... (输入@提及成员)"}
+                placeholder={isUserMuted() ? (groupDetail?.mute_all ? "全体禁言中" : "您已被禁言") : ""}
                 value={text}
                 disabled={isUserMuted()}
                 onChange={e => {
@@ -2830,6 +3078,108 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
                 }}
                 onPaste={handlePaste}
               />
+
+              {/* Emoji & Sticker Panel Trigger */}
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ width: '42px', height: '42px', borderRadius: '50%', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+                  onClick={(e) => { e.stopPropagation(); setShowStickerPanel(prev => !prev); }}
+                  disabled={isUserMuted()}
+                  title="选择表情/贴纸"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                    <line x1="9" y1="9" x2="9.01" y2="9" />
+                    <line x1="15" y1="9" x2="15.01" y2="9" />
+                  </svg>
+                </button>
+
+                {showStickerPanel && (
+                  <div
+                    className="cr-sticker-panel"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="cr-sticker-tabs">
+                      <button
+                        type="button"
+                        className={`cr-sticker-tab-btn ${stickerPanelTab === 'emoji' ? 'active' : ''}`}
+                        onClick={() => setStickerPanelTab('emoji')}
+                      >
+                        Emoji
+                      </button>
+                      <button
+                        type="button"
+                        className={`cr-sticker-tab-btn ${stickerPanelTab === 'sticker' ? 'active' : ''}`}
+                        onClick={() => setStickerPanelTab('sticker')}
+                      >
+                        图片表情
+                      </button>
+                    </div>
+
+                    <div className="cr-sticker-content" style={stickerPanelTab === 'emoji' ? { padding: 0, overflow: 'hidden' } : undefined}>
+                      {stickerPanelTab === 'emoji' ? (
+                        <EmojiPicker
+                          onEmojiClick={(emojiData) => handleEmojiClick(emojiData.emoji)}
+                          width="100%"
+                          height="100%"
+                          theme={document.documentElement.getAttribute('data-theme') === 'dark' ? Theme.DARK : Theme.LIGHT}
+                          searchPlaceholder="搜索表情..."
+                          lazyLoadEmojis={true}
+                          skinTonesDisabled={true}
+                        />
+                      ) : (
+                        <div className="cr-sticker-grid">
+                          {/* Add Sticker Button */}
+                          <div
+                            className="cr-sticker-add-btn"
+                            onClick={() => !uploadingSticker && stickerInputRef.current?.click()}
+                            title="导入图片表情"
+                          >
+                            {uploadingSticker ? (
+                              <div style={{ width: '20px', height: '20px', border: '2px solid rgba(255,255,255,0.2)', borderTopColor: 'var(--brand-blue)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                            ) : (
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="12" y1="5" x2="12" y2="19" />
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                              </svg>
+                            )}
+                          </div>
+
+                          {stickers.map((sticker) => (
+                            <div
+                              key={sticker.id}
+                              className="cr-sticker-item"
+                              onClick={() => handleSendSticker(sticker.url)}
+                            >
+                              <img src={sticker.url} alt="sticker" className="cr-sticker-img" />
+                              <button
+                                type="button"
+                                className="cr-sticker-delete-btn"
+                                onClick={(e) => handleDeleteSticker(sticker.id, e)}
+                                title="删除表情"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <input
+                type="file"
+                ref={stickerInputRef}
+                style={{ display: 'none' }}
+                accept="image/*"
+                onChange={handleAddStickerFromLocal}
+              />
+
               <button type="submit" className="btn cr-send" disabled={(!text.trim() && pendingFiles.length === 0) || isUserMuted()}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="22" y1="2" x2="11" y2="13" />
@@ -3522,6 +3872,27 @@ export function ChatRoom({ currentUserId, chatId, isGroup, chatName, chatAvatar,
               撤回
             </button>
           )}
+          {(() => {
+            if (contextMenu.content.startsWith('{')) {
+              try {
+                const parsed = JSON.parse(contextMenu.content);
+                if (parsed && parsed.type === 'chat_file' && parsed.file_type === 'image' && parsed.url) {
+                  return (
+                    <button
+                      className="cr-context-menu-item"
+                      onClick={() => {
+                        handleAddMessageImageToStickers(parsed.url);
+                        setContextMenu(null);
+                      }}
+                    >
+                      添加到表情包
+                    </button>
+                  );
+                }
+              } catch { /* ignore */ }
+            }
+            return null;
+          })()}
           <button className="cr-context-menu-item" onClick={() => handleStartMultiSelect(contextMenu.messageId)}>
             多选
           </button>

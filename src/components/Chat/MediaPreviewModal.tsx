@@ -424,6 +424,41 @@ export default function MediaPreviewModal({ files, index, onIndexChange, onClose
               </button>
             )}
 
+            {/* Add to Stickers (only for images) */}
+            {isImage && (
+              <button
+                className="mpv-btn"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    const res = await fetch(`${API_BASE}/api/stickers`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`
+                      },
+                      body: JSON.stringify({ url: file.url })
+                    });
+                    if (res.ok) {
+                      showToast('已添加到表情包', 'success');
+                    } else {
+                      showToast('添加表情包失败', 'error');
+                    }
+                  } catch {
+                    showToast('网络错误，添加失败', 'error');
+                  }
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '2px' }}>
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                  <line x1="9" y1="9" x2="9.01" y2="9" />
+                  <line x1="15" y1="9" x2="15.01" y2="9" />
+                </svg>
+                <span>添加到表情</span>
+              </button>
+            )}
+
             <div className="mpv-divider" />
 
             {/* Close */}

@@ -153,6 +153,11 @@ func main() {
 		// Chat Routes
 		api.POST("/chat/upload-credential", handlers.GetChatUploadCredential)
 
+		// Sticker Routes
+		api.GET("/stickers", handlers.GetStickers)
+		api.POST("/stickers", handlers.AddSticker)
+		api.DELETE("/stickers/:id", handlers.DeleteSticker)
+
 		// Game Routes
 		api.POST("/games", handlers.CreateGame)
 		api.GET("/games/:id", handlers.GetGame)
