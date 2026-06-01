@@ -3,6 +3,7 @@ import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useApp } from '../contexts/AppContext';
 import { Avatar } from '../components/shared/Avatar';
 import { useToast } from '../components/shared/Toast';
+import { API_BASE } from '../config';
 
 function getFirstLetter(name: string): string {
   if (!name) return '#';
@@ -18,12 +19,34 @@ function getFirstLetter(name: string): string {
 }
 
 export function ContactsPage() {
-  const { friends, friendRequests, handleFriendRequest, startChat, remarks, updateRemark, deleteFriend, deleteLocalChatHistory } = useApp();
+  const { token, friends, friendRequests, handleFriendRequest, startChat, remarks, updateRemark, deleteFriend, deleteLocalChatHistory } = useApp();
   const navigate = useNavigate();
   const { showToast } = useToast();
 
-  const [currentView, setCurrentView] = useState<'list' | 'requests' | 'detail'>('list');
+  const [currentView, setCurrentView] = useState<'list' | 'requests' | 'detail' | 'groups'>('list');
   const [selectedFriend, setSelectedFriend] = useState<any>(null);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [loadingGroups, setLoadingGroups] = useState(false);
+
+  useEffect(() => {
+    if (currentView === 'groups' && token) {
+      setLoadingGroups(true);
+      fetch(`${API_BASE}/api/groups`, {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setGroups(data);
+        }
+      })
+      .catch(err => console.error(err))
+      .finally(() => setLoadingGroups(false));
+    }
+  }, [currentView, token]);
 
   const location = useLocation();
   const state = location.state as { showDetailOfFriendId?: string } | null;
@@ -65,20 +88,44 @@ export function ContactsPage() {
     return () => window.removeEventListener('popstate', onPopState);
   }, [currentView]);
 
+  const fetchDetailedFriend = async (friendId: string, baseFriend: any) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/users/search?id=${friendId}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const fullUser = await res.json();
+        setSelectedFriend({
+          ...baseFriend,
+          ...fullUser,
+          status: fullUser.bio || '开启新的一天！🌟'
+        });
+      }
+    } catch (e) {
+      console.error("Failed to fetch detailed profile", e);
+    }
+  };
+
   useEffect(() => {
     if (state?.showDetailOfFriendId) {
       const found = friends.find(f => f.id === state.showDetailOfFriendId) as any;
       if (found) {
-        setSelectedFriend({
+        const detailedFriend = {
           ...found,
           status: found.status || '开启新的一天！🌟'
-        });
+        };
+        setSelectedFriend(detailedFriend);
         setCurrentView('detail');
         window.history.pushState({ view: 'detail' }, '');
         navigate(location.pathname, { replace: true, state: null });
+        fetchDetailedFriend(found.id, detailedFriend);
       }
     }
-  }, [state, friends, navigate, location.pathname]);
+  }, [state, friends, navigate, location.pathname, token]);
 
   const handleStartChat = (friendId: string, friendName: string) => {
     startChat(friendId, friendName);
@@ -107,6 +154,7 @@ export function ContactsPage() {
     setSelectedFriend(detailedFriend);
     setCurrentView('detail');
     window.history.pushState({ view: 'detail' }, '');
+    fetchDetailedFriend(friend.id, detailedFriend);
   };
 
   const handleSetRemark = () => {
@@ -420,6 +468,12 @@ export function ContactsPage() {
           </div>
 
           <div className="ct-content" style={{ position: 'relative' }}>
+            <div className="ct-item" onClick={() => { setCurrentView('groups'); window.history.pushState({ view: 'groups' }, ''); }}>
+              <div className="ct-item-info">
+                <div className="ct-item-name">群聊</div>
+              </div>
+            </div>
+
             {friends.length === 0 ? (
               <div className="ct-empty">暂无联系人</div>
             ) : (
@@ -531,6 +585,13 @@ export function ContactsPage() {
                 <div className="ct-detail-status">
                   {selectedFriend.status}
                 </div>
+                <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, textAlign: 'left', width: '100%', background: 'var(--hover)', padding: 12, borderRadius: 12, border: '1px solid var(--border)' }}>
+                  <div><strong>性别：</strong>{selectedFriend.gender || '（保密）'}</div>
+                  <div><strong>生日：</strong>{selectedFriend.birthday || '（未设置）'}</div>
+                  <div><strong>地区：</strong>{[selectedFriend.country, selectedFriend.city].filter(Boolean).join(' - ') || '（未知）'}</div>
+                  <div><strong>网站：</strong>{selectedFriend.website ? <a href={selectedFriend.website} target="_blank" rel="noreferrer" style={{color: 'var(--brand-blue)', wordBreak: 'break-all'}}>{selectedFriend.website}</a> : '（无）'}</div>
+                  <div><strong>职业：</strong>{selectedFriend.job || '（未设置）'}</div>
+                </div>
               </div>
               
               <div style={{ width: '100%', maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
@@ -568,6 +629,47 @@ export function ContactsPage() {
                 </button>
               </div>
             </div>
+          </div>
+        </>
+      )}
+
+      {/* RENDER VIEW: GROUPS */}
+      {currentView === 'groups' && (
+        <>
+          <div className="ct-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button className="ct-back-btn" onClick={() => navigate(-1)} title="返回">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12" />
+                  <polyline points="12 19 5 12 12 5" />
+                </svg>
+              </button>
+              <span className="ct-header-title">群聊</span>
+            </div>
+            <span style={{ width: 24 }} />
+          </div>
+
+          <div className="ct-content">
+            {loadingGroups ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}>
+                <span>加载中...</span>
+              </div>
+            ) : groups.length === 0 ? (
+              <div className="ct-empty">暂无加入的群聊</div>
+            ) : (
+              groups.map(group => (
+                <div key={group.id} className="ct-item" onClick={() => {
+                  startChat(group.id, group.name, true);
+                  navigate('/chat');
+                }}>
+                  <Avatar name={group.name} url={group.avatar} size={40} />
+                  <div className="ct-item-info">
+                    <div className="ct-item-name">{group.name}</div>
+                    <div className="ct-item-sub">成员: {group.members?.length || 0}人</div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </>
       )}

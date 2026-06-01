@@ -315,8 +315,20 @@ func establishFriendship(ctx context.Context, user1 primitive.ObjectID, user2 pr
 
 func SearchUser(c *gin.Context) {
 	username := strings.TrimSpace(strings.ToLower(c.Query("username")))
-	if username == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Username is required"})
+	idStr := strings.TrimSpace(c.Query("id"))
+
+	var filter bson.M
+	if idStr != "" {
+		objID, err := primitive.ObjectIDFromHex(idStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+			return
+		}
+		filter = bson.M{"_id": objID}
+	} else if username != "" {
+		filter = bson.M{"username": username}
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Username or ID is required"})
 		return
 	}
 
@@ -324,7 +336,7 @@ func SearchUser(c *gin.Context) {
 	defer cancel()
 
 	var user models.User
-	err := db.MongoDB.Collection("users").FindOne(ctx, bson.M{"username": username}).Decode(&user)
+	err := db.MongoDB.Collection("users").FindOne(ctx, filter).Decode(&user)
 	if err == mongo.ErrNoDocuments {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
@@ -334,11 +346,21 @@ func SearchUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, models.UserResponse{
-		ID:        user.ID.Hex(),
-		Username:  user.Username,
-		Nickname:  user.Nickname,
-		Avatar:    user.Avatar,
-		CreatedAt: user.CreatedAt,
+		ID:                 user.ID.Hex(),
+		Username:           user.Username,
+		Nickname:           user.Nickname,
+		Avatar:             user.Avatar,
+		CustomTransferPath: user.CustomTransferPath,
+		IsAI:               user.IsAI,
+		Role:               user.Role,
+		CreatedAt:          user.CreatedAt,
+		Bio:                user.Bio,
+		Gender:             user.Gender,
+		Birthday:           user.Birthday,
+		Country:            user.Country,
+		City:               user.City,
+		Website:            user.Website,
+		Job:                user.Job,
 	})
 }
 

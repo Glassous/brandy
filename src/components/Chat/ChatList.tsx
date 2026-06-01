@@ -12,6 +12,7 @@ interface ChatListProps {
   onHideChat?: (id: string) => void;
   onTogglePin?: (id: string) => void;
   activeFriendId?: string | null;
+  onAvatarClick?: (chat: ChatSession) => void;
 }
 
 function formatTime(ts: string) {
@@ -72,7 +73,8 @@ export function ChatList({
   onSelectFriend,
   onHideChat,
   onTogglePin,
-  activeFriendId
+  activeFriendId,
+  onAvatarClick
 }: ChatListProps) {
   const [contextMenu, setContextMenu] = useState<{ friendId: string; x: number; y: number } | null>(null);
 
@@ -106,6 +108,18 @@ export function ChatList({
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <style>{`
+        .chat-avatar-clickable {
+          cursor: pointer;
+          transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+          position: relative;
+          z-index: 5;
+        }
+        .chat-avatar-clickable:hover {
+          transform: scale(1.08);
+        }
+        .chat-avatar-clickable:active {
+          transform: scale(0.95);
+        }
         .chat-item {
           display: flex;
           align-items: center;
@@ -226,7 +240,17 @@ export function ChatList({
                 }}
                 onContextMenu={(e) => handleContextMenu(e, id)}
               >
-                <Avatar name={displayName} url={displayAvatar} size={40} />
+                <div
+                  className="chat-avatar-clickable"
+                  onClick={(e) => {
+                    if (onAvatarClick) {
+                      e.stopPropagation();
+                      onAvatarClick(chat);
+                    }
+                  }}
+                >
+                  <Avatar name={displayName} url={displayAvatar} size={40} />
+                </div>
                 <div className="chat-info">
                   <div className="chat-info-top">
                     <span className="chat-name">{displayName}</span>

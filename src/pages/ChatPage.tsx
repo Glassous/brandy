@@ -37,6 +37,48 @@ export function ChatPage() {
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
+  // Detail modal states
+  const [detailModalSession, setDetailModalSession] = useState<ChatSession | null>(null);
+  const [detailModalUser, setDetailModalUser] = useState<any | null>(null);
+  const [detailModalGroup, setDetailModalGroup] = useState<any | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const handleAvatarClick = async (session: ChatSession) => {
+    setDetailModalSession(session);
+    setLoadingDetail(true);
+    setDetailModalUser(null);
+    setDetailModalGroup(null);
+    try {
+      if (session.is_group) {
+        const res = await fetch(`${API_BASE}/api/groups/${session.group_id}`, {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          }
+        });
+        if (res.ok) {
+          const groupData = await res.json();
+          setDetailModalGroup(groupData);
+        }
+      } else {
+        const res = await fetch(`${API_BASE}/api/users/search?id=${session.friend_id}`, {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          }
+        });
+        if (res.ok) {
+          const userData = await res.json();
+          setDetailModalUser(userData);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingDetail(false);
+    }
+  };
+
   useEffect(() => {
     const handleClick = () => setShowSearchDropdown(false);
     window.addEventListener('click', handleClick);
@@ -454,6 +496,7 @@ export function ChatPage() {
             onHideChat={hideChat}
             onTogglePin={togglePinChat}
             activeFriendId={activeChatFriendId}
+            onAvatarClick={handleAvatarClick}
           />
         </div>
       </div>
@@ -547,6 +590,112 @@ export function ChatPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Details Profile / Group Info Modal */}
+      {detailModalSession && (
+        <div className="modal-overlay" onClick={() => setDetailModalSession(null)}>
+          <div className="modal-card" onClick={e => e.stopPropagation()} style={{ maxWidth: '380px' }}>
+            <div className="modal-header">
+              <span className="modal-title">
+                {detailModalSession.is_group ? '群聊资料' : '详细资料'}
+              </span>
+              <button 
+                className="modal-close-btn" 
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
+                onClick={() => setDetailModalSession(null)}
+              >
+                <CloseIcon size={20} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '24px 20px', display: 'flex', flexDirection: 'column', gap: '16px', alignItems: 'center', textAlign: 'center' }}>
+              {loadingDetail ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '32px 0' }}>
+                  <div className="spinner" style={{ width: '28px', height: '28px', borderRadius: '50%', border: '2px solid var(--border)', borderTopColor: 'var(--brand-blue)', animation: 'spin 0.8s linear infinite' }}></div>
+                  <style>{`
+                    @keyframes spin {
+                      to { transform: rotate(360deg); }
+                    }
+                  `}</style>
+                  <span style={{ fontSize: '13px', color: 'var(--text-dim)' }}>正在加载详情...</span>
+                </div>
+              ) : detailModalSession.is_group && detailModalGroup ? (
+                <>
+                  <Avatar name={detailModalGroup.name} url={detailModalGroup.avatar} size={72} fontSize={28} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)' }}>{detailModalGroup.name}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                      群成员: {detailModalGroup.members?.length || 0} 人
+                    </div>
+                  </div>
+                  <div style={{ width: '100%', height: '1px', background: 'var(--border)' }} />
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', textAlign: 'left', background: 'var(--hover)', padding: '12px', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                    <div><strong>群公告：</strong><span style={{ color: detailModalGroup.announcement ? 'var(--text)' : 'var(--text-dim)' }}>{detailModalGroup.announcement || '暂无公告'}</span></div>
+                    <div><strong>创建时间：</strong>{new Date(detailModalGroup.created_at).toLocaleDateString()}</div>
+                  </div>
+                  <button 
+                    className="btn btn-primary" 
+                    style={{ width: '100%', borderRadius: '20px', padding: '10px', fontWeight: 'bold', fontSize: '13px', marginTop: '8px' }}
+                    onClick={() => {
+                      startChat(detailModalGroup.id, detailModalGroup.name, true);
+                      setDetailModalSession(null);
+                    }}
+                  >
+                    进入群聊
+                  </button>
+                </>
+              ) : !detailModalSession.is_group && detailModalUser ? (
+                <>
+                  <Avatar name={remarks[detailModalUser.id] || detailModalUser.nickname || detailModalUser.username} url={detailModalUser.avatar} size={72} fontSize={28} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)' }}>
+                      {remarks[detailModalUser.id] || detailModalUser.nickname}
+                    </div>
+                    {remarks[detailModalUser.id] && (
+                      <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>昵称: {detailModalUser.nickname}</div>
+                    )}
+                    <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>@{detailModalUser.username}</div>
+                  </div>
+                  <div style={{ width: '100%', height: '1px', background: 'var(--border)' }} />
+                  <div 
+                    style={{ 
+                      width: '100%', 
+                      fontSize: '13px', 
+                      color: 'var(--text)', 
+                      fontStyle: 'italic', 
+                      background: 'var(--hover)', 
+                      padding: '10px 14px', 
+                      borderRadius: '12px', 
+                      border: '1px solid var(--border)',
+                      wordBreak: 'break-word'
+                    }}
+                  >
+                    {detailModalUser.bio || '开启新的一天！🌟'}
+                  </div>
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', textAlign: 'left', background: 'var(--hover)', padding: '12px', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                    <div><strong>性别：</strong>{detailModalUser.gender || '（保密）'}</div>
+                    <div><strong>生日：</strong>{detailModalUser.birthday || '（未设置）'}</div>
+                    <div><strong>地区：</strong>{[detailModalUser.country, detailModalUser.city].filter(Boolean).join(' - ') || '（未知）'}</div>
+                    <div><strong>网站：</strong>{detailModalUser.website ? <a href={detailModalUser.website} target="_blank" rel="noreferrer" style={{color: 'var(--brand-blue)', wordBreak: 'break-all'}}>{detailModalUser.website}</a> : '（无）'}</div>
+                    <div><strong>职业：</strong>{detailModalUser.job || '（未设置）'}</div>
+                  </div>
+                  <button 
+                    className="btn btn-primary" 
+                    style={{ width: '100%', borderRadius: '20px', padding: '10px', fontWeight: 'bold', fontSize: '13px', marginTop: '8px' }}
+                    onClick={() => {
+                      startChat(detailModalUser.id, remarks[detailModalUser.id] || detailModalUser.nickname);
+                      setDetailModalSession(null);
+                    }}
+                  >
+                    发消息
+                  </button>
+                </>
+              ) : (
+                <div style={{ padding: '20px', color: 'var(--text-dim)', fontSize: '13px' }}>加载失败</div>
+              )}
+            </div>
           </div>
         </div>
       )}
