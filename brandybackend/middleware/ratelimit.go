@@ -76,6 +76,9 @@ func isWhitelistedRoute(c *gin.Context) bool {
 	if strings.HasPrefix(path, "/api/groups/") && strings.HasSuffix(path, "/messages") {
 		return true
 	}
+	if path == "/api/auth/qr/status" {
+		return true
+	}
 	return false
 }
 

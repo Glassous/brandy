@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,11 +21,26 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type AdminRegisterReq struct {
+	RegisterReq
+	InvitationCode string `json:"invitation_code" binding:"required"`
+}
+
 // AdminRegister handles administrator account registration.
 func AdminRegister(c *gin.Context) {
-	var req RegisterReq
+	var req AdminRegisterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Verify Admin Invitation Code
+	expectedCode := os.Getenv("ADMIN_INVITATION_CODE")
+	if expectedCode == "" {
+		expectedCode = "BrandyAdminSecret2026" // Safe default fallback
+	}
+	if req.InvitationCode != expectedCode {
+		c.JSON(http.StatusForbidden, gin.H{"error": "注册邀请码不正确，拒绝注册管理员账号"})
 		return
 	}
 
