@@ -87,6 +87,8 @@ type UserResponse struct {
 	CustomTransferPath string    `json:"custom_transfer_path"`
 	IsAI               bool      `json:"is_ai,omitempty"`
 	Role               string    `json:"role,omitempty"`
+	DiskUsed           *int64    `json:"disk_used,omitempty"`
+	DiskLimit          *int64    `json:"disk_limit,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 	Bio                string    `json:"bio"`
 	Gender             string    `json:"gender"`

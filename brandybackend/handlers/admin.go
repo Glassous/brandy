@@ -364,6 +364,8 @@ func GetAdminUsers(c *gin.Context) {
 
 	userResponses := make([]models.UserResponse, 0, len(users))
 	for _, u := range users {
+		used, _ := calculateUsedSpace(ctx, u.ID)
+		limit := int64(DiskLimit)
 		userResponses = append(userResponses, models.UserResponse{
 			ID:                 u.ID.Hex(),
 			Username:           u.Username,
@@ -372,6 +374,8 @@ func GetAdminUsers(c *gin.Context) {
 			CustomTransferPath: u.CustomTransferPath,
 			Role:               u.Role,
 			IsAI:               u.IsAI,
+			DiskUsed:           &used,
+			DiskLimit:          &limit,
 			CreatedAt:          u.CreatedAt,
 		})
 	}
