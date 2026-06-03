@@ -56,8 +56,14 @@ func main() {
 		auth.POST("/send-code", handlers.SendVerificationCode)
 		auth.POST("/login-code", handlers.LoginWithCode)
 		auth.POST("/reset-password", handlers.ResetPassword)
-		auth.POST("/qr/uuid", handlers.GetQRUUID)
-		auth.GET("/qr/status", handlers.GetQRStatus)
+	}
+
+	// QR login polling needs higher rate limits
+	qrAuth := r.Group("/api/auth/qr")
+	qrAuth.Use(middleware.RateLimitMiddleware(middleware.DefaultRateLimit))
+	{
+		qrAuth.POST("/uuid", handlers.GetQRUUID)
+		qrAuth.GET("/status", handlers.GetQRStatus)
 	}
 
 	// Admin Public Routes
