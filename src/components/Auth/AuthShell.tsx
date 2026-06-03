@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import type { User } from '../../contexts/AppContext';
 import { API_BASE } from '../../config';
 
@@ -50,7 +51,70 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
   const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState('');
 
+  // QR Login states
+  const [qrState, setQrState] = useState<'loading' | 'active' | 'scanned' | 'confirmed' | 'expired'>('loading');
+  const [qrUuid, setQrUuid] = useState('');
+  const [qrUrl, setQrUrl] = useState('');
+
   const clearError = () => setError('');
+
+  const fetchQRCode = async () => {
+    if (mode !== 'login') return;
+    setQrState('loading');
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/qr/uuid`, { method: 'POST' });
+      const body = await res.json();
+      if (res.ok && body.data) {
+        setQrUuid(body.data.uuid);
+        setQrUrl(body.data.qr_url);
+        setQrState('active');
+      } else {
+        setQrState('expired');
+      }
+    } catch {
+      setQrState('expired');
+    }
+  };
+
+  useEffect(() => {
+    if (mode === 'login') {
+      fetchQRCode();
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'login' || !qrUuid || qrState === 'confirmed' || qrState === 'expired') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/qr/status?uuid=${qrUuid}`);
+        if (!res.ok) {
+          setQrState('expired');
+          clearInterval(interval);
+          return;
+        }
+        const body = await res.json();
+        if (body.data) {
+          const status = body.data.status;
+          if (status === 'scanned') {
+            setQrState('scanned');
+          } else if (status === 'confirmed' && body.data.token && body.data.user) {
+            setQrState('confirmed');
+            clearInterval(interval);
+            onLoginSuccess(body.data.token, body.data.user);
+          } else if (status === 'expired') {
+            setQrState('expired');
+            clearInterval(interval);
+          }
+        }
+      } catch {
+        // ignore errors during polling
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [qrUuid, qrState, mode]);
+
 
   // Countdown timer effect
   useEffect(() => {
@@ -484,9 +548,100 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
           25% { transform: translateX(-4px); }
           75% { transform: translateX(4px); }
         }
+        .auth-card.login-mode {
+          max-width: 660px;
+        }
+        .auth-login-split {
+          display: flex;
+          gap: 28px;
+          width: 100%;
+        }
+        .auth-form-side {
+          flex: 1.2;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .auth-qr-side {
+          flex: 0.8;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding-left: 28px;
+          border-left: 1px solid var(--border);
+          gap: 12px;
+        }
+        .qr-container-box {
+          width: 160px;
+          height: 160px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          position: relative;
+          background: #ffffff;
+          padding: 8px;
+          border-radius: 12px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+        .qr-overlay {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(255, 255, 255, 0.92);
+          backdrop-filter: blur(2px);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          color: #333333;
+          font-size: 12px;
+          font-weight: 600;
+          text-align: center;
+          padding: 8px;
+          cursor: pointer;
+        }
+        .qr-overlay-success {
+          background: rgba(255, 255, 255, 0.95);
+          color: #2e7d32;
+        }
+        .qr-hint-text {
+          font-size: 12px;
+          color: var(--text-dim);
+          text-align: center;
+          margin-top: 4px;
+        }
+        .qr-success-tick {
+          font-size: 32px;
+          color: #4caf50;
+          margin-bottom: 4px;
+        }
+        .qr-expired-icon {
+          font-size: 24px;
+          color: #f44336;
+          margin-bottom: 4px;
+        }
+        @media (max-width: 600px) {
+          .auth-card.login-mode {
+            max-width: 380px;
+          }
+          .auth-login-split {
+            flex-direction: column;
+          }
+          .auth-qr-side {
+            border-left: none;
+            border-top: 1px solid var(--border);
+            padding-left: 0;
+            padding-top: 20px;
+            width: 100%;
+          }
+        }
       `}</style>
 
-      <div className="auth-card">
+      <div className={`auth-card ${mode === 'login' ? 'login-mode' : ''}`}>
         {/* Brandy Logo */}
         <div className="auth-logo-area">
           <img src="/favicon.svg" alt="Brandy" className="auth-logo-icon" />
@@ -510,92 +665,133 @@ export function AuthShell({ onLoginSuccess }: AuthShellProps) {
 
         {/* LOGIN MODE */}
         {mode === 'login' && (
-          <form onSubmit={handleLogin} className="auth-form">
-            <div className="auth-tab-group">
-              <button
-                type="button"
-                className={`auth-tab-btn ${loginMethod === 'password' ? 'active' : ''}`}
-                onClick={() => { setLoginMethod('password'); clearError(); }}
-              >
-                密码登录
-              </button>
-              <button
-                type="button"
-                className={`auth-tab-btn ${loginMethod === 'code' ? 'active' : ''}`}
-                onClick={() => { setLoginMethod('code'); clearError(); }}
-              >
-                验证码登录
-              </button>
-            </div>
+          <div className="auth-login-split">
+            <form onSubmit={handleLogin} className="auth-form auth-form-side">
+              <div className="auth-tab-group">
+                <button
+                  type="button"
+                  className={`auth-tab-btn ${loginMethod === 'password' ? 'active' : ''}`}
+                  onClick={() => { setLoginMethod('password'); clearError(); }}
+                >
+                  密码登录
+                </button>
+                <button
+                  type="button"
+                  className={`auth-tab-btn ${loginMethod === 'code' ? 'active' : ''}`}
+                  onClick={() => { setLoginMethod('code'); clearError(); }}
+                >
+                  验证码登录
+                </button>
+              </div>
 
-            {loginMethod === 'password' ? (
-              <>
-                <div className="auth-input-wrapper">
-                  <input
-                    type="text"
-                    placeholder="用户名 或 电子邮箱"
-                    value={username}
-                    onChange={e => { setUsername(e.target.value); clearError(); }}
-                    autoFocus
-                    disabled={loading}
-                  />
-                </div>
-                <div className="auth-input-wrapper">
-                  <input
-                    type={showLoginPwd ? 'text' : 'password'}
-                    placeholder="密码"
-                    value={password}
-                    onChange={e => { setPassword(e.target.value); clearError(); }}
-                    disabled={loading}
-                  />
-                  <button type="button" className="auth-eye-btn" tabIndex={-1} onClick={() => setShowLoginPwd(v => !v)}>
-                    {showLoginPwd ? <EyeOffIcon /> : <EyeIcon />}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="auth-input-wrapper">
-                  <input
-                    type="text"
-                    placeholder="电子邮箱"
-                    value={email}
-                    onChange={e => { setEmail(e.target.value); clearError(); }}
-                    autoFocus
-                    disabled={loading}
-                  />
-                </div>
-                <div className="auth-code-wrapper">
-                  <div className="auth-input-wrapper" style={{ flex: 1 }}>
+              {loginMethod === 'password' ? (
+                <>
+                  <div className="auth-input-wrapper">
                     <input
                       type="text"
-                      placeholder="6位验证码"
-                      value={code}
-                      onChange={e => { setCode(e.target.value); clearError(); }}
-                      maxLength={6}
+                      placeholder="用户名 或 电子邮箱"
+                      value={username}
+                      onChange={e => { setUsername(e.target.value); clearError(); }}
+                      autoFocus
                       disabled={loading}
                     />
                   </div>
-                  <button
-                    type="button"
-                    className="auth-getcode-btn"
-                    disabled={loading || sending || countdown > 0}
-                    onClick={() => handleSendCode('login', email)}
-                  >
-                    {countdown > 0 ? `${countdown}s` : sending ? '发送中...' : '获取验证码'}
-                  </button>
-                </div>
-              </>
-            )}
+                  <div className="auth-input-wrapper">
+                    <input
+                      type={showLoginPwd ? 'text' : 'password'}
+                      placeholder="密码"
+                      value={password}
+                      onChange={e => { setPassword(e.target.value); clearError(); }}
+                      disabled={loading}
+                    />
+                    <button type="button" className="auth-eye-btn" tabIndex={-1} onClick={() => setShowLoginPwd(v => !v)}>
+                      {showLoginPwd ? <EyeOffIcon /> : <EyeIcon />}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="auth-input-wrapper">
+                    <input
+                      type="text"
+                      placeholder="电子邮箱"
+                      value={email}
+                      onChange={e => { setEmail(e.target.value); clearError(); }}
+                      autoFocus
+                      disabled={loading}
+                    />
+                  </div>
+                  <div className="auth-code-wrapper">
+                    <div className="auth-input-wrapper" style={{ flex: 1 }}>
+                      <input
+                        type="text"
+                        placeholder="6位验证码"
+                        value={code}
+                        onChange={e => { setCode(e.target.value); clearError(); }}
+                        maxLength={6}
+                        disabled={loading}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="auth-getcode-btn"
+                      disabled={loading || sending || countdown > 0}
+                      onClick={() => handleSendCode('login', email)}
+                    >
+                      {countdown > 0 ? `${countdown}s` : sending ? '发送中...' : '获取验证码'}
+                    </button>
+                  </div>
+                </>
+              )}
 
-            <button type="submit" className="auth-btn" disabled={loading}>
-              {loading ? '正在登录...' : '登录'}
-            </button>
-            <div className="auth-footer">
-              <button type="button" className="auth-link-btn" onClick={() => switchMode('register')}>注册账号</button>
-              <button type="button" className="auth-link-btn" onClick={() => switchMode('forgot_code')}>忘记密码</button>
+              <button type="submit" className="auth-btn" disabled={loading}>
+                {loading ? '正在登录...' : '登录'}
+              </button>
+              <div className="auth-footer">
+                <button type="button" className="auth-link-btn" onClick={() => switchMode('register')}>注册账号</button>
+                <button type="button" className="auth-link-btn" onClick={() => switchMode('forgot_code')}>忘记密码</button>
+              </div>
+            </form>
+
+            <div className="auth-qr-side">
+              <div className="qr-container-box">
+                {qrState === 'loading' && <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>加载中...</div>}
+                
+                {qrState === 'active' && qrUrl && (
+                  <QRCodeSVG value={qrUrl} size={144} />
+                )}
+
+                {qrState === 'scanned' && (
+                  <>
+                    <QRCodeSVG value={qrUrl} size={144} style={{ opacity: 0.15 }} />
+                    <div className="qr-overlay qr-overlay-scanned">
+                      <span className="qr-success-tick">✓</span>
+                      <span>已扫描</span>
+                      <span style={{ fontSize: '10px', color: '#666666', marginTop: '2px' }}>请在手机端确认</span>
+                    </div>
+                  </>
+                )}
+
+                {qrState === 'confirmed' && (
+                  <div className="qr-overlay qr-overlay-success">
+                    <span className="qr-success-tick">✓</span>
+                    <span>登录成功</span>
+                  </div>
+                )}
+
+                {qrState === 'expired' && (
+                  <div className="qr-overlay" onClick={fetchQRCode}>
+                    <span className="qr-expired-icon">↻</span>
+                    <span>二维码已失效</span>
+                    <span style={{ fontSize: '10px', color: '#888888', marginTop: '2px' }}>点击刷新</span>
+                  </div>
+                )}
+              </div>
+              <div className="qr-hint-text">
+                使用 Brandy 手机端<strong>扫一扫</strong>登录
+              </div>
             </div>
-          </form>
+          </div>
         )}
 
         {/* REGISTER MODE */}

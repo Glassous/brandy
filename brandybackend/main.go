@@ -56,6 +56,8 @@ func main() {
 		auth.POST("/send-code", handlers.SendVerificationCode)
 		auth.POST("/login-code", handlers.LoginWithCode)
 		auth.POST("/reset-password", handlers.ResetPassword)
+		auth.POST("/qr/uuid", handlers.GetQRUUID)
+		auth.GET("/qr/status", handlers.GetQRStatus)
 	}
 
 	// Admin Public Routes
@@ -163,6 +165,10 @@ func main() {
 		api.GET("/games/:id", handlers.GetGame)
 		api.POST("/games/:id/join", handlers.JoinGame)
 		api.POST("/games/:id/move", handlers.MakeMove)
+
+		// QR Auth Scan & Confirm Routes
+		api.POST("/auth/qr/scan", handlers.ScanQR)
+		api.POST("/auth/qr/confirm", handlers.ConfirmQR)
 	}
 
 	// WebSocket endpoint
