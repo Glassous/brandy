@@ -87,7 +87,16 @@ func main() {
 		adminAPI.DELETE("/users/:id", handlers.DeleteAdminUser)
 		adminAPI.GET("/groups", handlers.GetAdminGroups)
 		adminAPI.DELETE("/groups/:id", handlers.DeleteAdminGroup)
+
+		// Android version control routes
+		adminAPI.POST("/app/version", handlers.PublishAppVersion)
+		adminAPI.GET("/app/versions", handlers.GetVersionHistory)
+		adminAPI.POST("/app/upload", handlers.UploadApk)
 	}
+
+	// Public Version Check Route
+	r.GET("/api/app/version", handlers.GetAppVersion)
+
 
 	// Protected Routes
 	api := r.Group("/api")

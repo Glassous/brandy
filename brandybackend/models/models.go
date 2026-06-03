@@ -223,3 +223,15 @@ type Sticker struct {
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 }
 
+type AppVersion struct {
+	ID                      primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	VersionCode             int                `bson:"version_code" json:"version_code"`
+	VersionName             string             `bson:"version_name" json:"version_name"`
+	DownloadURL             string             `bson:"download_url" json:"download_url"`
+	Description             string             `bson:"description" json:"description"`
+	ForceUpdate             bool               `bson:"force_update" json:"force_update"`
+	MinSupportedVersionCode int                `bson:"min_supported_version_code" json:"min_supported_version_code"`
+	CreatedAt               time.Time          `bson:"created_at" json:"created_at"`
+}
+
+
