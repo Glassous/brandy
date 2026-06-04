@@ -1,9 +1,29 @@
+import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useApp } from '../../contexts/AppContext';
+import { API_BASE } from '../../config';
+import { QRCodeSVG } from 'qrcode.react';
 
 export function MainLayout() {
   const { pathname } = useLocation();
   const { chats, friendRequests, activeChatFriendId } = useApp();
+  const [downloadUrl, setDownloadUrl] = useState<string>('');
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/app/version`)
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error('Failed to fetch');
+      })
+      .then(data => {
+        if (data && data.download_url) {
+          setDownloadUrl(data.download_url);
+        }
+      })
+      .catch(() => {
+        setDownloadUrl(window.location.origin + '/apk/brandy.apk');
+      });
+  }, []);
 
   const unread = chats.reduce((s, c) => s + c.unread_count, 0);
   const requests = friendRequests.length;
@@ -104,6 +124,38 @@ export function MainLayout() {
         .rail-item.active .rail-pill {
           background: var(--rail-active-pill);
           color: var(--rail-active-text);
+        }
+
+        .rail-item-phone {
+          position: relative;
+          cursor: pointer;
+        }
+
+        .phone-popover {
+          position: absolute;
+          left: 72px;
+          bottom: -10px;
+          background: var(--bg-card);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+          padding: 12px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 10px;
+          opacity: 0;
+          pointer-events: none;
+          transform: translateX(10px);
+          transition: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+          z-index: 100;
+          width: 156px;
+        }
+
+        .rail-item-phone:hover .phone-popover {
+          opacity: 1;
+          pointer-events: auto;
+          transform: translateX(0);
         }
 
         .rail-icon {
@@ -287,6 +339,35 @@ export function MainLayout() {
 
         {/* Bottom Destination Items */}
         <div className="rail-group">
+          {/* Phone Icon / Download Popover */}
+          <div className="rail-item rail-item-phone" title="下载手机端">
+            <div className="rail-pill">
+              <svg className="rail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+                <circle cx="12" cy="18" r="1" />
+              </svg>
+            </div>
+            
+            {/* Popover on Hover */}
+            <div className="phone-popover">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text)', width: '100%', justifyContent: 'flex-start' }}>
+                <svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="#3DDC84">
+                  <path d="M40-240q9-107 65.5-197T256-580l-74-128q-6-9-3-19t13-15q8-5 18-2t16 12l74 128q86-36 180-36t180 36l74-128q6-9 16-12t18 2q10 5 13 15t-3 19l-74 128q94 53 150.5 143T920-240H40Zm275.5-124.5Q330-379 330-400t-14.5-35.5Q301-450 280-450t-35.5 14.5Q230-421 230-400t14.5 35.5Q259-350 280-350t35.5-14.5Zm400 0Q730-379 730-400t-14.5-35.5Q701-450 680-450t-35.5 14.5Q630-421 630-400t14.5 35.5Q659-350 680-350t35.5-14.5Z"/>
+                </svg>
+                <span style={{ fontSize: '13px', fontWeight: '600' }}>Android</span>
+              </div>
+              <div style={{ background: '#ffffff', padding: '6px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {downloadUrl ? (
+                  <QRCodeSVG value={downloadUrl} size={112} />
+                ) : (
+                  <div style={{ width: 112, height: 112, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', color: '#999999' }}>
+                    加载中...
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Settings / Profile Link */}
           <Link to="/profile" className={`rail-item ${pathname.startsWith('/profile') ? 'active' : ''}`} title="设置">
             <div className="rail-pill">
