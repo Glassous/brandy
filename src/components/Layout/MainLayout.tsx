@@ -305,7 +305,7 @@ export function MainLayout() {
         {/* Top Destination Items */}
         <div className="rail-group">
           {/* Chat Link */}
-          <Link to="/chat" className={`rail-item ${isChatRoute ? 'active' : ''}`} title="聊天">
+          <Link to="/chat" className={`rail-item ${isChatRoute ? 'active' : ''}`} data-tooltip="聊天" data-tooltip-pos="right">
             <div className="rail-pill">
               {unread > 0 && <span className="rail-badge">{unread}</span>}
               <svg className="rail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -315,7 +315,7 @@ export function MainLayout() {
           </Link>
 
           {/* Contacts Link */}
-          <Link to="/contacts" className={`rail-item ${pathname.startsWith('/contacts') || pathname === '/add-friend' ? 'active' : ''}`} title="联系人">
+          <Link to="/contacts" className={`rail-item ${pathname.startsWith('/contacts') || pathname === '/add-friend' ? 'active' : ''}`} data-tooltip="联系人" data-tooltip-pos="right">
             <div className="rail-pill">
               {requests > 0 && <span className="rail-badge">{requests}</span>}
               <svg className="rail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -328,7 +328,7 @@ export function MainLayout() {
           </Link>
 
           {/* Cloud Disk Link */}
-          <Link to="/disk" className={`rail-item ${pathname.startsWith('/disk') ? 'active' : ''}`} title="云盘">
+          <Link to="/disk" className={`rail-item ${pathname.startsWith('/disk') ? 'active' : ''}`} data-tooltip="云盘" data-tooltip-pos="right">
             <div className="rail-pill">
               <svg className="rail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
@@ -340,7 +340,7 @@ export function MainLayout() {
         {/* Bottom Destination Items */}
         <div className="rail-group">
           {/* Phone Icon / Download Popover */}
-          <div className="rail-item rail-item-phone" title="下载手机端">
+          <div className="rail-item rail-item-phone">
             <div className="rail-pill">
               <svg className="rail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
@@ -369,7 +369,7 @@ export function MainLayout() {
           </div>
 
           {/* Settings / Profile Link */}
-          <Link to="/profile" className={`rail-item ${pathname.startsWith('/profile') ? 'active' : ''}`} title="设置">
+          <Link to="/profile" className={`rail-item ${pathname.startsWith('/profile') ? 'active' : ''}`} data-tooltip="设置" data-tooltip-pos="right">
             <div className="rail-pill">
               <svg className="rail-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />

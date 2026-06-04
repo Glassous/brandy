@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './components/shared/Toast';
@@ -30,6 +31,35 @@ function LoginPage() {
 
 
 export default function App() {
+  useEffect(() => {
+    const handleMouseEnter = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target) return;
+      
+      let el: HTMLElement | null = target;
+      let depth = 0;
+      while (el && depth < 3) {
+        if (el.tagName === 'IFRAME') break;
+        if (el.hasAttribute('title')) {
+          const titleText = el.getAttribute('title');
+          if (titleText) {
+            el.setAttribute('data-tooltip', titleText);
+            el.setAttribute('data-title', titleText);
+            el.removeAttribute('title');
+          }
+          break;
+        }
+        el = el.parentElement;
+        depth++;
+      }
+    };
+
+    document.addEventListener('mouseenter', handleMouseEnter, true);
+    return () => {
+      document.removeEventListener('mouseenter', handleMouseEnter, true);
+    };
+  }, []);
+
   return (
     <BrowserRouter>
       <ThemeProvider>
