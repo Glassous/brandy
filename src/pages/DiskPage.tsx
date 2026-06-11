@@ -97,7 +97,6 @@ export function DiskPage() {
 
   const [showUrlTransferModal, setShowUrlTransferModal] = useState(false);
   const [transferUrl, setTransferUrl] = useState('');
-  const [isTransferring, setIsTransferring] = useState(false);
 
   const [renameTarget, setRenameTarget] = useState<DiskItem | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -2203,7 +2202,7 @@ export function DiskPage() {
 
       {/* Modal: URL Transfer */}
       {showUrlTransferModal && (
-        <div className="modal-overlay" onClick={() => !isTransferring && setShowUrlTransferModal(false)}>
+        <div className="modal-overlay" onClick={() => setShowUrlTransferModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3 className="modal-title">URL 链接转存</h3>
             <form onSubmit={handleUrlTransfer} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -2214,7 +2213,6 @@ export function DiskPage() {
                 value={transferUrl}
                 onChange={(e) => setTransferUrl(e.target.value)}
                 placeholder="请输入文件直链 URL，例如 https://example.com/file.zip"
-                disabled={isTransferring}
                 rows={4}
                 style={{
                   width: '100%',
@@ -2233,7 +2231,6 @@ export function DiskPage() {
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
-                  disabled={isTransferring}
                   onClick={() => {
                     setShowUrlTransferModal(false);
                     setTransferUrl('');
@@ -2244,17 +2241,10 @@ export function DiskPage() {
                 <button
                   type="submit"
                   className="btn btn-sm"
-                  disabled={isTransferring || !transferUrl.trim()}
+                  disabled={!transferUrl.trim()}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
-                  {isTransferring ? (
-                    <>
-                      <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                      正在启动...
-                    </>
-                  ) : (
-                    '开始转存'
-                  )}
+                  开始转存
                 </button>
               </div>
             </form>
