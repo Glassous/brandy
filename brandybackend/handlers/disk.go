@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"brandybackend/db"
@@ -24,7 +27,36 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-const DiskLimit = 500 * 1024 * 1024 // 500MB in bytes
+const DiskLimit = 2 * 1024 * 1024 * 1024 // 2GB in bytes
+
+type TransferTask struct {
+	ID           string    `json:"id"`
+	UserID       string    `json:"user_id"`
+	Status       string    `json:"status"` // "downloading", "uploading", "completed", "error"
+	Filename     string    `json:"filename"`
+	Size         int64     `json:"size"`
+	Progress     int       `json:"progress"` // 0-100
+	Downloaded   int64     `json:"downloaded"`
+	Uploaded     int64     `json:"uploaded"`
+	ErrorMessage string    `json:"error_message"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+var (
+	transferTasksMu sync.RWMutex
+	transferTasks   = make(map[string]*TransferTask)
+)
+
+func cleanExpiredTransferTasks() {
+	transferTasksMu.Lock()
+	defer transferTasksMu.Unlock()
+	now := time.Now()
+	for id, task := range transferTasks {
+		if now.Sub(task.UpdatedAt) > 30*time.Minute {
+			delete(transferTasks, id)
+		}
+	}
+}
 
 // Helper to get COS Client
 func getCOSClient() (*cos.Client, string, string, string, error) {
@@ -1821,4 +1853,404 @@ func copyFolderRecordRecursively(ctx context.Context, client *cos.Client, bucket
 	}
 
 	return nil
+}
+
+type progressWriter struct {
+	writer io.Writer
+	onProgress func(n int)
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n, err := pw.writer.Write(p)
+	if n > 0 && pw.onProgress != nil {
+		pw.onProgress(n)
+	}
+	return n, err
+}
+
+type progressReader struct {
+	reader io.Reader
+	onRead func(n int)
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 && pr.onRead != nil {
+		pr.onRead(n)
+	}
+	return n, err
+}
+
+// URLTransferDiskFile handles starting an async transfer task.
+func URLTransferDiskFile(c *gin.Context) {
+	userIDStr := c.GetString("userID")
+	userID, _ := primitive.ObjectIDFromHex(userIDStr)
+
+	var req struct {
+		URL      string `json:"url" binding:"required"`
+		ParentID string `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数不正确: " + err.Error()})
+		return
+	}
+
+	targetURL := strings.TrimSpace(req.URL)
+	if targetURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "URL 不能为空"})
+		return
+	}
+
+	// Validate URL schema
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 URL，仅支持 http 和 https 协议"})
+		return
+	}
+
+	// Calculate space capacity beforehand
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	usedSpace, err := calculateUsedSpace(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法校验云盘已用空间: " + err.Error()})
+		return
+	}
+
+	remainingSpace := DiskLimit - usedSpace
+	if remainingSpace <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "您的云盘空间不足（限额 2GB）"})
+		return
+	}
+
+	// Generate task ID
+	taskID := uuid.New().String()
+
+	// Clean expired tasks
+	cleanExpiredTransferTasks()
+
+	// Initialize task progress record
+	task := &TransferTask{
+		ID:        taskID,
+		UserID:    userID.Hex(),
+		Status:    "pending",
+		Filename:  parsedURL.Path, // fallback filename initially
+		Size:      0,
+		Progress:  0,
+		UpdatedAt: time.Now(),
+	}
+
+	// Extract a tentative filename from URL path
+	tempName := filepath.Base(parsedURL.Path)
+	if tempName != "" && tempName != "." && tempName != "/" {
+		task.Filename = sanitizeFilename(tempName)
+	} else {
+		task.Filename = "downloaded_file"
+	}
+
+	transferTasksMu.Lock()
+	transferTasks[taskID] = task
+	transferTasksMu.Unlock()
+
+	// Start asynchronous background worker
+	go func(tID string, uID primitive.ObjectID, tURL string, pID string, remSpace int64) {
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer bgCancel()
+
+		updateTaskError := func(errMsg string) {
+			transferTasksMu.Lock()
+			if tk, exists := transferTasks[tID]; exists {
+				tk.Status = "error"
+				tk.ErrorMessage = errMsg
+				tk.UpdatedAt = time.Now()
+			}
+			transferTasksMu.Unlock()
+		}
+
+		// Update status to downloading
+		transferTasksMu.Lock()
+		if tk, exists := transferTasks[tID]; exists {
+			tk.Status = "downloading"
+			tk.UpdatedAt = time.Now()
+		}
+		transferTasksMu.Unlock()
+
+		// 1. Fetch file via GET request
+		httpReq, err := http.NewRequestWithContext(bgCtx, "GET", tURL, nil)
+		if err != nil {
+			updateTaskError("构建下载请求失败: " + err.Error())
+			return
+		}
+		httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+		client := &http.Client{}
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			updateTaskError("下载连接失败: " + err.Error())
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			updateTaskError(fmt.Sprintf("文件服务器返回错误: %d %s", resp.StatusCode, resp.Status))
+			return
+		}
+
+		// Update filename and size from headers if available
+		actualFilename := extractFilenameFromResponse(resp, tURL)
+		fileSize := resp.ContentLength
+
+		transferTasksMu.Lock()
+		if tk, exists := transferTasks[tID]; exists {
+			tk.Filename = actualFilename
+			if fileSize > 0 {
+				tk.Size = fileSize
+			}
+		}
+		transferTasksMu.Unlock()
+
+		// Verify size early if Content-Length header is present
+		if fileSize > 0 && fileSize > remSpace {
+			updateTaskError(fmt.Sprintf("云盘剩余空间不足。文件大小: %s, 剩余容量: %s", formatBytesSize(fileSize), formatBytesSize(remSpace)))
+			return
+		}
+
+		// 2. Download to a local temporary file
+		tempFile, err := os.CreateTemp("", "brandy-transfer-*")
+		if err != nil {
+			updateTaskError("创建临时下载缓冲区失败: " + err.Error())
+			return
+		}
+		defer func() {
+			tempFile.Close()
+			os.Remove(tempFile.Name())
+		}()
+
+		// Wrap with progressWriter to track download progress (counts for 0% to 50%)
+		pw := &progressWriter{
+			writer: tempFile,
+			onProgress: func(n int) {
+				transferTasksMu.Lock()
+				if tk, exists := transferTasks[tID]; exists {
+					tk.Downloaded += int64(n)
+					tk.UpdatedAt = time.Now()
+					if tk.Size > 0 {
+						tk.Progress = int((float64(tk.Downloaded) / float64(tk.Size)) * 50)
+					} else {
+						// Indeterminate progress logic (caps at 45% during download)
+						tk.Progress = int(float64(tk.Downloaded) / float64(remSpace) * 45)
+						if tk.Progress > 45 {
+							tk.Progress = 45
+						}
+					}
+				}
+				transferTasksMu.Unlock()
+			},
+		}
+
+		// Copy stream, limit reader to remSpace + 1
+		written, err := io.Copy(pw, io.LimitReader(resp.Body, remSpace+1))
+		if err != nil {
+			updateTaskError("文件流下载中断: " + err.Error())
+			return
+		}
+
+		if written > remSpace {
+			updateTaskError("下载流超过您的云盘剩余容量限制")
+			return
+		}
+		if written == 0 {
+			updateTaskError("下载的为空文件")
+			return
+		}
+
+		// Update final size
+		transferTasksMu.Lock()
+		if tk, exists := transferTasks[tID]; exists {
+			tk.Size = written
+			tk.Downloaded = written
+			tk.Status = "uploading"
+			tk.Progress = 50
+			tk.UpdatedAt = time.Now()
+		}
+		transferTasksMu.Unlock()
+
+		// Reset temp file pointer
+		_, err = tempFile.Seek(0, 0)
+		if err != nil {
+			updateTaskError("重置临时文件流失败: " + err.Error())
+			return
+		}
+
+		// 3. Initialize COS Client
+		cosClient, _, _, customDomain, err := getCOSClient()
+		if err != nil {
+			updateTaskError("存储服务初始化失败: " + err.Error())
+			return
+		}
+
+		// Plan destination CosKey
+		ext := strings.ToLower(filepath.Ext(actualFilename))
+		uuidStr := uuid.New().String()
+		cosKey := fmt.Sprintf("disk/%s/%s%s", uID.Hex(), uuidStr, ext)
+
+		// Wrap tempFile with progressReader to track upload progress (counts for 50% to 100%)
+		pr := &progressReader{
+			reader: tempFile,
+			onRead: func(n int) {
+				transferTasksMu.Lock()
+				if tk, exists := transferTasks[tID]; exists {
+					tk.Uploaded += int64(n)
+					tk.UpdatedAt = time.Now()
+					if tk.Size > 0 {
+						tk.Progress = 50 + int((float64(tk.Uploaded) / float64(tk.Size)) * 50)
+						if tk.Progress > 99 {
+							tk.Progress = 99 // reserve 100% for DB completion
+						}
+					} else {
+						tk.Progress = 75
+					}
+				}
+				transferTasksMu.Unlock()
+			},
+		}
+
+		// 4. Upload to Tencent Cloud COS
+		_, err = cosClient.Object.Put(bgCtx, cosKey, pr, nil)
+		if err != nil {
+			updateTaskError("文件上传至云存储失败: " + err.Error())
+			return
+		}
+
+		// Construct final file URL
+		domain := strings.TrimRight(customDomain, "/")
+		if !strings.HasPrefix(domain, "http://") && !strings.HasPrefix(domain, "https://") {
+			domain = "https://" + domain
+		}
+		fileURL := fmt.Sprintf("%s/%s", domain, cosKey)
+
+		// 5. Register in MongoDB
+		var parentFilter *primitive.ObjectID
+		if pID != "" && pID != "root" {
+			pid, err := primitive.ObjectIDFromHex(pID)
+			if err == nil {
+				parentFilter = &pid
+			}
+		}
+
+		newItem := models.DiskItem{
+			ID:        primitive.NewObjectID(),
+			UserID:    uID,
+			ParentID:  parentFilter,
+			Name:      actualFilename,
+			Type:      "file",
+			Size:      written,
+			CosKey:    cosKey,
+			URL:       fileURL,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+
+		_, err = db.MongoDB.Collection("disk_items").InsertOne(bgCtx, newItem)
+		if err != nil {
+			// Cleanup uploaded COS file if DB record creation fails
+			_, _ = cosClient.Object.Delete(bgCtx, cosKey)
+			updateTaskError("保存元数据到数据库失败: " + err.Error())
+			return
+		}
+
+		// Mark as completed!
+		transferTasksMu.Lock()
+		if tk, exists := transferTasks[tID]; exists {
+			tk.Status = "completed"
+			tk.Progress = 100
+			tk.Uploaded = written
+			tk.UpdatedAt = time.Now()
+		}
+		transferTasksMu.Unlock()
+
+	}(taskID, userID, targetURL, req.ParentID, remainingSpace)
+
+	// Return success response with task ID immediately
+	c.JSON(http.StatusOK, gin.H{
+		"message": "转存任务已成功启动，正在后台拉取传输",
+		"task_id": taskID,
+		"name":    task.Filename,
+	})
+}
+
+// GetURLTransferStatus reports the current status of an async transfer task.
+func GetURLTransferStatus(c *gin.Context) {
+	taskID := c.Param("id")
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "任务 ID 不能为空"})
+		return
+	}
+
+	transferTasksMu.RLock()
+	task, exists := transferTasks[taskID]
+	transferTasksMu.RUnlock()
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "找不到该转存任务，可能已过期"})
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
+}
+
+// Helper function to format bytes size to string
+func formatBytesSize(bytes int64) string {
+	const k = 1024
+	sizes := []string{"B", "KB", "MB", "GB"}
+	if bytes == 0 {
+		return "0 B"
+	}
+	i := 0
+	val := float64(bytes)
+	for val >= k && i < len(sizes)-1 {
+		val /= k
+		i++
+	}
+	return fmt.Sprintf("%.1f %s", val, sizes[i])
+}
+
+// Helper to extract filename from response headers or URL path
+func extractFilenameFromResponse(resp *http.Response, targetURL string) string {
+	// 1. Try Content-Disposition
+	cd := resp.Header.Get("Content-Disposition")
+	if cd != "" {
+		if _, params, err := mime.ParseMediaType(cd); err == nil {
+			if filename, ok := params["filename"]; ok && filename != "" {
+				return sanitizeFilename(filename)
+			}
+		}
+	}
+
+	// 2. Try URL Path
+	u, err := url.Parse(targetURL)
+	if err == nil {
+		base := filepath.Base(u.Path)
+		if base != "" && base != "." && base != "/" {
+			return sanitizeFilename(base)
+		}
+	}
+
+	// 3. Fallback
+	return "downloaded_file"
+}
+
+// sanitizeFilename strips dangerous characters and makes sure the filename is valid
+func sanitizeFilename(name string) string {
+	if decoded, err := url.QueryUnescape(name); err == nil {
+		name = decoded
+	}
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." {
+		return "downloaded_file"
+	}
+	return name
 }

@@ -58,7 +58,7 @@ export function DiskPage() {
   const [items, setItems] = useState<DiskItem[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<Breadcrumb[]>([]);
   const [usedSpace, setUsedSpace] = useState<number>(0);
-  const [limitSpace, setLimitSpace] = useState<number>(500 * 1024 * 1024); // Upgrade default to 500M
+  const [limitSpace, setLimitSpace] = useState<number>(2 * 1024 * 1024 * 1024); // Upgrade default to 2GB
 
   const [loading, setLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -94,6 +94,10 @@ export function DiskPage() {
   // Modals state
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+
+  const [showUrlTransferModal, setShowUrlTransferModal] = useState(false);
+  const [transferUrl, setTransferUrl] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
 
   const [renameTarget, setRenameTarget] = useState<DiskItem | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -408,6 +412,163 @@ export function DiskPage() {
       }
     } catch {
       showToast('网络错误，创建失败', 'error');
+    }
+  };
+
+  // Handle URL link transfer
+  const handleUrlTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedUrl = transferUrl.trim();
+    if (!trimmedUrl) return;
+
+    if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
+      showToast('链接必须以 http:// 或 https:// 开头', 'error');
+      return;
+    }
+
+    // 1. Close modal and clean input early for non-blocking feel
+    setShowUrlTransferModal(false);
+    setTransferUrl('');
+
+    // 2. Generate a local task ID to represent this transfer in UI
+    const localTaskId = 'url-transfer-' + Math.random().toString(36).substring(2, 9) + '-' + Date.now();
+    
+    // Extract name from URL path
+    let fileName = '转存文件';
+    try {
+      const u = new URL(trimmedUrl);
+      const parts = u.pathname.split('/');
+      const lastPart = parts[parts.length - 1];
+      if (lastPart) {
+        fileName = decodeURIComponent(lastPart);
+      }
+    } catch { /* ignore */ }
+
+    const newTask: UploadTask = {
+      id: localTaskId,
+      fileName: `[链接转存] ${fileName}`,
+      size: 0,
+      progress: 0,
+      status: 'pending',
+      speed: 0,
+      loaded: 0,
+      lastTime: Date.now(),
+      lastLoaded: 0,
+    };
+
+    // Add to upload list and open upload drawer
+    setUploadTasks(prev => [newTask, ...prev]);
+    setShowUploadList(true);
+    setIsUploadListMinimized(false);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/disk/url-transfer`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          url: trimmedUrl,
+          parent_id: currentFolderId || 'root'
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || '后端启动转存任务失败');
+      }
+
+      const data = await res.json();
+      const backendTaskId = data.task_id;
+
+      // Update filename if backend parsed a better one
+      if (data.name) {
+        setUploadTasks(prev => prev.map(t => t.id === localTaskId ? { ...t, fileName: `[链接转存] ${data.name}` } : t));
+      }
+
+      // Start polling status
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${API_BASE}/api/disk/url-transfer/status/${backendTaskId}`, {
+            headers: getHeaders(),
+          });
+
+          if (!statusRes.ok) {
+            clearInterval(pollInterval);
+            const errData = await statusRes.json();
+            throw new Error(errData.error || '获取转存状态失败');
+          }
+
+          const statusData = await statusRes.json();
+
+          if (statusData.status === 'completed') {
+            clearInterval(pollInterval);
+            setUploadTasks(prev => prev.map(t => t.id === localTaskId ? {
+              ...t,
+              status: 'completed',
+              progress: 100,
+              size: statusData.size || 0,
+              loaded: statusData.size || 0,
+              speed: 0
+            } : t));
+            showToast(`文件「${statusData.filename || fileName}」转存成功！`, 'success');
+            fetchItems(currentFolderId);
+            fetchUsage();
+          } else if (statusData.status === 'error') {
+            clearInterval(pollInterval);
+            setUploadTasks(prev => prev.map(t => t.id === localTaskId ? {
+              ...t,
+              status: 'error',
+              errorMessage: statusData.error_message || '转存失败',
+              speed: 0
+            } : t));
+            showToast(`转存失败: ${statusData.error_message || ''}`, 'error');
+          } else {
+            // Updating status (downloading / uploading)
+            setUploadTasks(prev => prev.map(t => {
+              if (t.id !== localTaskId) return t;
+
+              // Calculate speed if bytes downloaded/uploaded changed
+              const now = Date.now();
+              const timeDiff = (now - t.lastTime) / 1000;
+              let currentLoaded = statusData.status === 'downloading' ? statusData.downloaded : statusData.uploaded;
+              let speed = t.speed;
+              if (timeDiff >= 0.5) {
+                const loadedDiff = currentLoaded - t.lastLoaded;
+                const currentSpeed = loadedDiff / timeDiff;
+                speed = speed === 0 ? currentSpeed : speed * 0.7 + currentSpeed * 0.3;
+              }
+
+              return {
+                ...t,
+                status: 'uploading',
+                fileName: `[转存:${statusData.status === 'downloading' ? '下载中' : '上传中'}] ${statusData.filename || fileName}`,
+                size: statusData.size || 0,
+                loaded: currentLoaded,
+                progress: statusData.progress,
+                speed: speed,
+                lastTime: now,
+                lastLoaded: currentLoaded,
+              };
+            }));
+          }
+        } catch (pollErr: any) {
+          clearInterval(pollInterval);
+          setUploadTasks(prev => prev.map(t => t.id === localTaskId ? {
+            ...t,
+            status: 'error',
+            errorMessage: pollErr.message || '轮询任务状态失败',
+            speed: 0
+          } : t));
+        }
+      }, 1500);
+
+    } catch (err: any) {
+      setUploadTasks(prev => prev.map(t => t.id === localTaskId ? {
+        ...t,
+        status: 'error',
+        errorMessage: err.message || '启动转存请求失败',
+        speed: 0
+      } : t));
+      showToast(err.message || '网络错误，转存请求失败', 'error');
     }
   };
 
@@ -1291,6 +1452,17 @@ export function DiskPage() {
           transition: width 0.3s ease;
         }
 
+        @keyframes indeterminate-progress {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(200%); }
+        }
+        .queue-item-progress-fill.indeterminate {
+          width: 50% !important;
+          background: linear-gradient(90deg, transparent, var(--brand-blue), transparent);
+          animation: indeterminate-progress 1.5s infinite linear;
+          transform-origin: left;
+        }
+
         .queue-item-progress-fill.completed {
           background: var(--brand-green, #4CAF50);
         }
@@ -1693,6 +1865,11 @@ export function DiskPage() {
                   <FolderPlus size={16} />
                   <span className="btn-text">新建文件夹</span>
                 </button>
+
+                <button className="btn btn-secondary" onClick={() => setShowUrlTransferModal(true)}>
+                  <Link size={16} />
+                  <span className="btn-text">URL转存</span>
+                </button>
               </>
             ) : (
               <button className="btn btn-danger" onClick={handleClearTrash} disabled={trashItems.length === 0}>
@@ -1997,8 +2174,8 @@ export function DiskPage() {
                     {(task.status === 'uploading' || task.status === 'pending') && (
                       <div className="queue-item-progress-container">
                         <div
-                          className="queue-item-progress-fill"
-                          style={{ width: `${task.progress}%` }}
+                          className={`queue-item-progress-fill ${task.id.startsWith('url-transfer-') && task.size === 0 ? 'indeterminate' : ''}`}
+                          style={{ width: task.id.startsWith('url-transfer-') && task.size === 0 ? '100%' : `${task.progress}%` }}
                         />
                       </div>
                     )}
@@ -2021,6 +2198,67 @@ export function DiskPage() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal: URL Transfer */}
+      {showUrlTransferModal && (
+        <div className="modal-overlay" onClick={() => !isTransferring && setShowUrlTransferModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">URL 链接转存</h3>
+            <form onSubmit={handleUrlTransfer} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                输入 HTTP/HTTPS 文件直链，系统会自动下载该文件并保存至当前文件夹目录（大小限制 2GB 以内）。
+              </div>
+              <textarea
+                value={transferUrl}
+                onChange={(e) => setTransferUrl(e.target.value)}
+                placeholder="请输入文件直链 URL，例如 https://example.com/file.zip"
+                disabled={isTransferring}
+                rows={4}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: 'var(--radius)',
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  fontSize: '13px',
+                  resize: 'none',
+                  outline: 'none',
+                }}
+                autoFocus
+              />
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={isTransferring}
+                  onClick={() => {
+                    setShowUrlTransferModal(false);
+                    setTransferUrl('');
+                  }}
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-sm"
+                  disabled={isTransferring || !transferUrl.trim()}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  {isTransferring ? (
+                    <>
+                      <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                      正在启动...
+                    </>
+                  ) : (
+                    '开始转存'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

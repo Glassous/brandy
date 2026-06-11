@@ -157,6 +157,8 @@ func main() {
 		api.POST("/disk/share/friend", handlers.ShareToFriend)
 		api.GET("/disk/check-transfer/:origin_id", handlers.CheckTransferStatus)
 		api.POST("/disk/transfer", handlers.TransferDiskFile)
+		api.POST("/disk/url-transfer", handlers.URLTransferDiskFile)
+		api.GET("/disk/url-transfer/status/:id", handlers.GetURLTransferStatus)
 		api.POST("/disk/save-chat-file", handlers.SaveChatFileToDisk)
 		api.GET("/disk/check-chat-transfer", handlers.CheckChatTransferStatus)
 		api.GET("/disk/trash", handlers.GetTrashItems)
